@@ -1,0 +1,16 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+attendance.db
+records.db
+
+# Node.js
+node_modules/
+dist/
+.env
+
+# Config
+.vscode/
+.idea/
+*.log
