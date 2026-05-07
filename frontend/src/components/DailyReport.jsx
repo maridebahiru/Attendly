@@ -12,6 +12,25 @@ const DailyReport = () => {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [nameFilter, setNameFilter] = useState('');
 
+  useEffect(() => {
+    // On mount, find the latest date with activity
+    const initDate = async () => {
+      try {
+        const res = await client.get('/attendance/latest-date');
+        if (res.data.date) {
+            setSelectedDate(res.data.date);
+            // Also update month/year for monthly view consistency
+            const d = new Date(res.data.date);
+            setSelectedMonth(d.getMonth() + 1);
+            setSelectedYear(d.getFullYear());
+        }
+      } catch (e) {
+        console.error("Failed to fetch latest date", e);
+      }
+    };
+    initDate();
+  }, []);
+
   const fetchReport = async () => {
     setLoading(true);
     try {

@@ -8,6 +8,21 @@ export default function AttendanceGrid({ newEventsCount }) {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [nameFilter, setNameFilter] = useState('');
 
+  useEffect(() => {
+    // On mount, find the latest date with activity so the dashboard isn't empty
+    const initDate = async () => {
+      try {
+        const res = await client.get('/attendance/latest-date');
+        if (res.data.date) {
+            setSelectedDate(res.data.date);
+        }
+      } catch (e) {
+        console.error("Failed to fetch latest date", e);
+      }
+    };
+    initDate();
+  }, []);
+
   const fetchReport = async () => {
     setLoading(true);
     try {
@@ -27,10 +42,11 @@ export default function AttendanceGrid({ newEventsCount }) {
     fetchReport();
   }, [selectedDate, nameFilter, newEventsCount]);
 
-  const getPunchByOrder = (punches, order) => {
-    // order 0: Morning In, 1: Morning Out, 2: Afternoon In, 3: Afternoon Out
-    if (punches && punches[order]) {
-      return punches[order].time;
+  const getPunchByLabel = (punches, label) => {
+    // We now look for the specific persisted label rather than relying on array order
+    if (punches) {
+      const punch = punches.find(p => p.label === label);
+      return punch ? punch.time : '';
     }
     return '';
   };
@@ -101,26 +117,26 @@ export default function AttendanceGrid({ newEventsCount }) {
                     </td>
                     
                     <td className="px-6 py-4 text-center whitespace-nowrap">
-                      <span className={`text-sm font-black ${getPunchByOrder(user.punches, 0) ? 'text-blue-600' : 'text-gray-300'}`}>
-                        {getPunchByOrder(user.punches, 0) || '---'}
+                      <span className={`text-sm font-black ${getPunchByLabel(user.punches, "Morning In") ? 'text-blue-600' : 'text-gray-300'}`}>
+                        {getPunchByLabel(user.punches, "Morning In") || '---'}
                       </span>
                     </td>
 
                     <td className="px-6 py-4 text-center whitespace-nowrap">
-                      <span className={`text-sm font-black ${getPunchByOrder(user.punches, 1) ? 'text-orange-600' : 'text-gray-300'}`}>
-                        {getPunchByOrder(user.punches, 1) || '---'}
+                      <span className={`text-sm font-black ${getPunchByLabel(user.punches, "Morning Out") ? 'text-orange-600' : 'text-gray-300'}`}>
+                        {getPunchByLabel(user.punches, "Morning Out") || '---'}
                       </span>
                     </td>
 
                     <td className="px-6 py-4 text-center whitespace-nowrap">
-                      <span className={`text-sm font-black ${getPunchByOrder(user.punches, 2) ? 'text-blue-600' : 'text-gray-300'}`}>
-                        {getPunchByOrder(user.punches, 2) || '---'}
+                      <span className={`text-sm font-black ${getPunchByLabel(user.punches, "Afternoon In") ? 'text-blue-600' : 'text-gray-300'}`}>
+                        {getPunchByLabel(user.punches, "Afternoon In") || '---'}
                       </span>
                     </td>
 
                     <td className="px-6 py-4 text-center whitespace-nowrap">
-                      <span className={`text-sm font-black ${getPunchByOrder(user.punches, 3) ? 'text-orange-600' : 'text-gray-300'}`}>
-                        {getPunchByOrder(user.punches, 3) || '---'}
+                      <span className={`text-sm font-black ${getPunchByLabel(user.punches, "Afternoon Out") ? 'text-orange-600' : 'text-gray-300'}`}>
+                        {getPunchByLabel(user.punches, "Afternoon Out") || '---'}
                       </span>
                     </td>
                   </tr>
@@ -128,8 +144,8 @@ export default function AttendanceGrid({ newEventsCount }) {
               )}
             </tbody>
           </table>
-        )}
-      </div>
+        )
+      }</div>
     </div>
   );
 }

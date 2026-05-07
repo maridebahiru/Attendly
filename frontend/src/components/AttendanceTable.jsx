@@ -21,7 +21,7 @@ export default function AttendanceTable({ newEventsCount }) {
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      let url = `/attendance?skip=${page * limit}&limit=${limit}`;
+      let url = `/attendance?skip=${page * limit}&limit=${limit}&_t=${Date.now()}`;
       if (filters.date) url += `&date=${filters.date}`;
       if (filters.userId) url += `&user_id=${filters.userId}`;
       
@@ -46,9 +46,9 @@ export default function AttendanceTable({ newEventsCount }) {
 
   const startEdit = (log) => {
     setEditingId(log.id);
-    // Format timestamp for datetime-local input
-    const date = new Date(log.timestamp);
-    const formattedDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    // Since log.timestamp is already an ISO string from the backend (e.g. 2026-05-06T15:30:00),
+    // we can just slice it to the first 19 characters to safely use it in the datetime-local input
+    const formattedDate = log.timestamp ? log.timestamp.slice(0, 19) : '';
     setEditTime(formattedDate);
     setEditType(log.punch_type);
   };
@@ -61,9 +61,11 @@ export default function AttendanceTable({ newEventsCount }) {
 
   const saveEdit = async (logId) => {
     try {
+      const userName = localStorage.getItem('username') || 'Admin';
       await client.put(`/attendance/${logId}`, {
-        timestamp: new Date(editTime).toISOString(),
-        punch_type: editType
+        timestamp: editTime, 
+        punch_type: editType,
+        edited_by: userName
       });
       setEditingId(null);
       fetchLogs(); // Refresh list
@@ -139,6 +141,7 @@ export default function AttendanceTable({ newEventsCount }) {
                     {editingId && editingId === log.id ? (
                       <input 
                         type="datetime-local" 
+                        step="1"
                         value={editTime}
                         onChange={(e) => setEditTime(e.target.value)}
                         className="border border-blue-300 rounded px-2 py-1 text-sm focus:ring-2 focus:ring-blue-500 outline-none"

@@ -25,10 +25,11 @@ export default function Login({ onLogin }) {
         }
       });
 
-      const { access_token, role } = response.data;
+      const { access_token, role, privileges } = response.data;
       localStorage.setItem('token', access_token);
       localStorage.setItem('user_role', role);
       localStorage.setItem('username', username);
+      localStorage.setItem('privileges', JSON.stringify(privileges || []));
       
       onLogin(access_token);
     } catch (err) {

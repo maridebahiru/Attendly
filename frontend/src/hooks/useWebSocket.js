@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * Custom React hook for connecting to the backend WebSocket
  * Auto-reconnects on disconnect with 3s delay
  */
-export function useWebSocket(url = 'ws://localhost:8000/ws') {
+export function useWebSocket(url = `ws://${window.location.hostname}:8000/ws`) {
   const [lastEvent, setLastEvent] = useState(null);
   const [deviceStatus, setDeviceStatus] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -38,6 +38,8 @@ export function useWebSocket(url = 'ws://localhost:8000/ws') {
             });
           } else if (payload.type === 'device_status') {
             setDeviceStatus(payload);
+          } else if (payload.type === 'sync_complete') {
+            setLastEvent({ type: 'sync', count: payload.synced_count, timestamp: new Date().toISOString() });
           }
         } catch (err) {
           console.error("Failed to parse websocket message", err);
@@ -71,9 +73,17 @@ export function useWebSocket(url = 'ws://localhost:8000/ws') {
         clearTimeout(reconnectTimeoutRef.current);
       }
       if (wsRef.current) {
-        // Remove onclose listener to avoid triggering reconnect during unmount
-        wsRef.current.onclose = null;
-        wsRef.current.close();
+        const ws = wsRef.current;
+        // Remove listeners to avoid triggering reconnect or errors during unmount
+        ws.onclose = null;
+        ws.onerror = null;
+        
+        // If connecting, wait for open before closing to prevent browser warnings
+        if (ws.readyState === 0) { // WebSocket.CONNECTING
+          ws.onopen = () => ws.close();
+        } else {
+          ws.close();
+        }
       }
     };
   }, [connect]);
