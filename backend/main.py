@@ -22,7 +22,7 @@ from database import init_db, get_db, async_session, Admin, AttendanceLog
 import crud
 from websocket_manager import manager
 from zk_listener import start_listener
-from sync import heartbeat, on_reconnect
+from sync import heartbeat, on_reconnect, sync_ethiopian_holidays
 import schemas
 import auth
 
@@ -32,16 +32,18 @@ async def lifespan(app: FastAPI):
     # Initialize DB (creates sqlite tables if absent)
     await init_db()
     
-    # Start zk_listener and heartbeat as background tasks
+    # Start zk_listener, heartbeat, and holiday sync as background tasks
     loop = asyncio.get_running_loop()
     listener_task = loop.create_task(start_listener())
     heartbeat_task = loop.create_task(heartbeat())
+    holiday_task = loop.create_task(sync_ethiopian_holidays())
     
     yield
     
     # Cleanup tasks on shutdown
     listener_task.cancel()
     heartbeat_task.cancel()
+    holiday_task.cancel()
 
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -56,10 +58,14 @@ async def validation_exception_handler(request, exc):
         content={"detail": exc.errors()},
     )
 
-# CORS enabled for http://localhost:5173
+# CORS enabled for local and network access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://192.168.10.241:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -91,6 +97,14 @@ async def get_attendance_logs(
         
         response = []
         for log, user_name in results:
+            # Subtract 6 hours from timestamp to find the correct Ethiopian date
+            eth_dt = log.timestamp - timedelta(hours=6)
+            from ethiopian_date import gregorian_to_ethiopian
+            eth_d = gregorian_to_ethiopian(eth_dt.date())
+            eth_date_str = f"{eth_d.year}-{eth_d.month:02d}-{eth_d.day:02d}"
+            # Display standard time (with 6 hours shift included) consistently
+            eth_time_str = log.timestamp.strftime("%H:%M:%S")
+
             response.append({
                 "id": log.id,
                 "user_id": log.user_id,
@@ -98,8 +112,11 @@ async def get_attendance_logs(
                 "timestamp": log.timestamp,
                 "server_timestamp": log.server_timestamp,
                 "punch_type": log.punch_type,
+                "punch_label": log.punch_label,
                 "verify_type": log.verify_type,
-                "sync_status": log.sync_status
+                "sync_status": log.sync_status,
+                "eth_date": eth_date_str,
+                "eth_time": eth_time_str
             })
         return response
 
@@ -205,8 +222,9 @@ from sqlalchemy.future import select
 @app.post("/login")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     async with async_session() as db:
-        # First, try to login as Admin
-        result = await db.execute(select(Admin).filter(Admin.username == form_data.username))
+        # First, try to login as Admin (Case-insensitive check for username)
+        from sqlalchemy import func
+        result = await db.execute(select(Admin).filter(func.lower(Admin.username) == form_data.username.lower()))
         admin = result.scalars().first()
         
         if admin and auth.verify_password(form_data.password, admin.hashed_password):
@@ -228,8 +246,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         result = await db.execute(select(User).filter(User.user_id == form_data.username))
         user = result.scalars().first()
         
-        # Check if user exists and has a password set (we'll allow simple PIN or password check)
-        # Note: For biometric users, some systems use their PIN as password.
+        # Check if user exists and has a password set
         if user and user.password == form_data.password:
             access_token_expires = timedelta(minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES)
             access_token = auth.create_access_token(
@@ -245,6 +262,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             }
 
         # If both fail
+        logger.warning(f"Failed login attempt for username: {form_data.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -275,10 +293,21 @@ async def seed_admin():
 @app.post("/admins", response_model=schemas.AdminOut)
 async def create_admin(admin: schemas.AdminCreate, super_admin: Admin = Depends(auth.check_super_admin)):
     """Only super_admin can create new admins/super_admins"""
+    from sqlalchemy import func
     async with async_session() as db:
+        # Trim whitespace
+        clean_username = admin.username.strip()
+        
+        # Explicit case-insensitive duplicate check
+        result = await db.execute(
+            select(Admin).filter(func.lower(Admin.username) == clean_username.lower())
+        )
+        if result.scalars().first():
+            raise HTTPException(status_code=400, detail="Username already exists")
+
         hashed_pw = auth.get_password_hash(admin.password)
         new_admin = Admin(
-            username=admin.username,
+            username=clean_username,
             hashed_password=hashed_pw,
             role=admin.role,
             privileges=json.dumps(admin.privileges)
@@ -293,7 +322,8 @@ async def create_admin(admin: schemas.AdminCreate, super_admin: Admin = Depends(
             return res
         except Exception as e:
             await db.rollback()
-            raise HTTPException(status_code=400, detail="Username already exists")
+            logger.error(f"Failed to create admin: {e}")
+            raise HTTPException(status_code=500, detail="Internal server error while creating admin")
 
 @app.get("/admins", response_model=List[schemas.AdminOut])
 async def list_admins(super_admin: Admin = Depends(auth.check_super_admin)):
@@ -329,7 +359,18 @@ async def update_admin_role(admin_id: int, update_data: schemas.AdminUpdate, sup
             raise HTTPException(status_code=404, detail="Admin not found")
         
         if update_data.username:
-            admin.username = update_data.username
+            from sqlalchemy import func
+            clean_username = update_data.username.strip()
+            # Check if new username is taken by someone else
+            result = await db.execute(
+                select(Admin).filter(
+                    func.lower(Admin.username) == clean_username.lower(),
+                    Admin.id != admin_id
+                )
+            )
+            if result.scalars().first():
+                raise HTTPException(status_code=400, detail="Username already exists")
+            admin.username = clean_username
         if update_data.password:
             admin.hashed_password = auth.get_password_hash(update_data.password)
         if update_data.role:
@@ -359,13 +400,13 @@ async def update_my_profile(update_data: schemas.AdminUpdate, current_user: Admi
         return user
 
 @app.post("/shifts", response_model=schemas.ShiftOut)
-async def create_new_shift(shift: schemas.ShiftCreate, current_user: Admin = Depends(auth.check_admin)):
+async def create_new_shift(shift: schemas.ShiftCreate, current_user: Admin = Depends(auth.check_super_admin)):
     """POST /shifts — define a new working shift"""
     async with async_session() as db:
         return await crud.create_shift(db, shift)
 
 @app.post("/users/{user_id}/shift")
-async def assign_shift_to_user(user_id: str, shift_id: int, current_user: Admin = Depends(auth.check_admin)):
+async def assign_shift_to_user(user_id: str, shift_id: int, current_user: Admin = Depends(auth.check_super_admin)):
     """POST /users/{user_id}/shift — assign a shift to a specific user"""
     async with async_session() as db:
         user = await crud.assign_user_shift(db, user_id, shift_id)
@@ -449,12 +490,228 @@ async def seed_shifts():
         except Exception as e:
             return {"success": False, "message": str(e)}
 
+def add_6_hours(time_str: Optional[str]) -> Optional[str]:
+    if not time_str: return None
+    try:
+        h, m = map(int, time_str.split(":"))
+        h = (h + 6) % 24
+        return f"{h:02d}:{m:02d}"
+    except Exception:
+        return time_str
+
+def subtract_6_hours(time_str: Optional[str]) -> Optional[str]:
+    if not time_str: return None
+    try:
+        h, m = map(int, time_str.split(":"))
+        h = (h - 6 + 24) % 24
+        return f"{h:02d}:{m:02d}"
+    except Exception:
+        return time_str
+
 @app.get("/settings", response_model=schemas.SystemSettingsOut)
 async def get_settings():
     async with async_session() as db:
-        return await crud.get_settings(db)
+        settings = await crud.get_settings(db)
+        # Convert to Pydantic and subtract 6 hours for Ethiopian display
+        res = schemas.SystemSettingsOut.model_validate(settings)
+        time_fields = [
+            "entering_time", "out_time", "morning_in", "morning_out", "afternoon_in", "afternoon_out",
+            "morning_in_start", "morning_in_end", "morning_out_start", "morning_out_end",
+            "afternoon_in_start", "afternoon_in_end", "afternoon_out_start", "afternoon_out_end"
+        ]
+        for field in time_fields:
+            val = getattr(res, field, None)
+            if val:
+                setattr(res, field, subtract_6_hours(val))
+        return res
 
 @app.put("/settings", response_model=schemas.SystemSettingsOut)
 async def update_settings(settings_update: schemas.SystemSettingsUpdate, current_user: Admin = Depends(auth.check_super_admin)):
+    # Add 6 hours to all incoming time fields to convert Ethiopian to standard Gregorian
+    time_fields = [
+        "entering_time", "out_time", "morning_in", "morning_out", "afternoon_in", "afternoon_out",
+        "morning_in_start", "morning_in_end", "morning_out_start", "morning_out_end",
+        "afternoon_in_start", "afternoon_in_end", "afternoon_out_start", "afternoon_out_end"
+    ]
+    for field in time_fields:
+        val = getattr(settings_update, field, None)
+        if val is not None:
+            setattr(settings_update, field, add_6_hours(val))
+            
     async with async_session() as db:
-        return await crud.update_settings(db, settings_update)
+        settings = await crud.update_settings(db, settings_update)
+        
+        # Convert back to Ethiopian for the response
+        res = schemas.SystemSettingsOut.model_validate(settings)
+        for field in time_fields:
+            val = getattr(res, field, None)
+            if val:
+                setattr(res, field, subtract_6_hours(val))
+        return res
+
+# Absence Reporting Endpoints
+@app.post("/absences", response_model=schemas.AbsenceReportOut)
+async def submit_absence_report(report: schemas.AbsenceReportCreate, current_user = Depends(auth.get_current_user)):
+    """POST /absences — Submit a staff absence report. Allowed for Team Leaders and Super Admins."""
+    role = getattr(current_user, 'role', None)
+    if role not in ["super_admin", "admin", "team_leader"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Only Team Leaders and Admins/Super Admins can submit absence reports"
+        )
+    async with async_session() as db:
+        # Check if user exists
+        user_result = await db.execute(select(crud.User).filter(crud.User.user_id == report.user_id))
+        user = user_result.scalars().first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Staff user not found")
+            
+        username = getattr(current_user, 'username', getattr(current_user, 'name', 'Unknown'))
+        db_report = await crud.create_absence_report(db, report, username)
+        
+        # Convert to response schema
+        res = schemas.AbsenceReportOut.model_validate(db_report)
+        res.name = user.name
+        return res
+
+@app.get("/absences", response_model=List[schemas.AbsenceReportOut])
+async def get_all_absence_reports(current_user = Depends(auth.get_current_user)):
+    """GET /absences — List submitted absence reports. Allowed for Team Leaders and Admins/Super Admins."""
+    role = getattr(current_user, 'role', None)
+    if role not in ["super_admin", "admin", "team_leader"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Only Team Leaders and Admins/Super Admins can view absence reports"
+        )
+    async with async_session() as db:
+        results = await crud.get_absence_reports(db)
+        response = []
+        for report, user_name in results:
+            res = schemas.AbsenceReportOut.model_validate(report)
+            res.name = user_name
+            response.append(res)
+        return response
+
+@app.put("/absences/{report_id}", response_model=schemas.AbsenceReportOut)
+async def update_absence_report_status(report_id: int, update_data: schemas.AbsenceReportUpdate, current_user = Depends(auth.check_super_admin)):
+    """PUT /absences/{report_id} — Approve, reject, or edit absence reports. Restricted to Super Admin."""
+    async with async_session() as db:
+        username = getattr(current_user, 'username', 'super_admin')
+        db_report = await crud.update_absence_report(db, report_id, update_data, username)
+        if not db_report:
+            raise HTTPException(status_code=404, detail="Absence report not found")
+            
+        # Get user details
+        user_result = await db.execute(select(crud.User).filter(crud.User.user_id == db_report.user_id))
+        user = user_result.scalars().first()
+        
+        res = schemas.AbsenceReportOut.model_validate(db_report)
+        res.name = user.name if user else "Unknown"
+        return res
+
+@app.get("/calendar/today")
+async def get_calendar_today():
+    from datetime import date
+    from ethiopian_date import gregorian_to_ethiopian
+    eth_d = gregorian_to_ethiopian(date.today())
+    return {
+        "year": eth_d.year,
+        "month": eth_d.month,
+        "day": eth_d.day,
+        "formatted": f"{eth_d.year}-{eth_d.month:02d}-{eth_d.day:02d}"
+    }
+
+@app.get("/holidays")
+async def get_holidays(date_val: Optional[date] = Query(None, alias="date")):
+    if not date_val:
+        date_val = date.today()
+    async with async_session() as db:
+        from database import EthiopianHoliday
+        res = await db.execute(select(EthiopianHoliday).filter(EthiopianHoliday.date == date_val.isoformat()))
+        holiday = res.scalars().first()
+        if holiday:
+            return {"holiday": holiday.name}
+        return {"holiday": None}
+
+@app.get("/settings/holidays")
+async def get_all_settings_holidays():
+    async with async_session() as db:
+        from database import EthiopianHoliday
+        res = await db.execute(select(EthiopianHoliday).order_by(EthiopianHoliday.date))
+        holidays = res.scalars().all()
+        # Convert date to Ethiopian format for display
+        from ethiopian_date import gregorian_to_ethiopian
+        from datetime import date as d_type
+        response = []
+        for h in holidays:
+            try:
+                g_dt = d_type.fromisoformat(h.date)
+                eth_d = gregorian_to_ethiopian(g_dt)
+                eth_d_str = f"{eth_d.year}-{eth_d.month:02d}-{eth_d.day:02d}"
+            except Exception:
+                eth_d_str = h.date
+            response.append({
+                "name": h.name,
+                "date": eth_d_str,
+                "gregorian_date": h.date
+            })
+        return response
+
+@app.post("/settings/holidays/sync")
+async def force_sync_holidays(
+    year: int = Query(..., description="Gregorian Year to sync"),
+    current_user: Admin = Depends(auth.check_super_admin)
+):
+    from database import EthiopianHoliday
+    from sqlalchemy import delete
+    import asyncio
+    from sync import fetch_holidays_from_api
+    
+    if year < 2000 or year > 2100:
+        raise HTTPException(status_code=400, detail="Invalid year. Must be between 2000 and 2100.")
+        
+    async with async_session() as db:
+        # Delete existing holidays to replace with new fetched data
+        await db.execute(delete(EthiopianHoliday))
+        await db.commit()
+        
+        # Call Calendarific API for specified year
+        loop = asyncio.get_running_loop()
+        holidays = await loop.run_in_executor(None, fetch_holidays_from_api, year)
+        
+        if not holidays:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to fetch holidays from API for year {year}. Check API key, network, or rate limits."
+            )
+            
+        new_holidays = []
+        seen_dates = set()
+        for h in holidays:
+            h_date = h.get("date", {}).get("iso")
+            if h_date:
+                h_date = h_date.split("T")[0] # YYYY-MM-DD
+                
+            if h_date and h_date not in seen_dates:
+                h_type = h.get("type", ["National holiday"])[0]
+                new_holidays.append(EthiopianHoliday(
+                    name=h.get("name"),
+                    date=h_date,
+                    type=h_type
+                ))
+                seen_dates.add(h_date)
+                
+        if new_holidays:
+            db.add_all(new_holidays)
+            await db.commit()
+            return {
+                "success": True,
+                "message": f"Successfully synchronized and replaced calendar data for year {year}.",
+                "count": len(new_holidays)
+            }
+        else:
+            return {
+                "success": True,
+                "message": f"Calendar synced for year {year}, but no active public holidays were found.",
+                "count": 0
+            }

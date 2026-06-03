@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // Create a configured axios client for REST endpoints
 const client = axios.create({
-  baseURL: 'http://127.0.0.1:8000',
+  baseURL: `http://${window.location.hostname}:8000`,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -18,6 +18,21 @@ client.interceptors.request.use(
     return config;
   },
   (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Add a response interceptor to handle unauthorized errors
+client.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response && error.response.status === 401) {
+      // Clear local storage and redirect if unauthorized
+      localStorage.removeItem('token');
+      localStorage.removeItem('user_role');
+      localStorage.removeItem('username');
+      window.location.reload(); // Redirects to login since token is now null
+    }
     return Promise.reject(error);
   }
 );

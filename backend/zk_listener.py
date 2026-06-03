@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from zk import ZK
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from database import async_session
 import crud
@@ -11,22 +11,24 @@ from sync import on_reconnect
 
 logger = logging.getLogger(__name__)
 
-DEVICE_IP = "192.168.10.40"
-DEVICE_PORT = 4370
-
 async def start_listener():
     """Main loop for listening to live capture events."""
+    print("DEBUG: Entering start_listener...")
     logger.info("Starting ZKTeco live listener...")
     attempt = 0
     max_attempts = 5
     
     while True:
         try:
-            # Initialize connection configuration
-            # Quirk: Platform ZMM200_TFT might disconnect if no ping is sent
-            zk = ZK(DEVICE_IP, port=DEVICE_PORT, timeout=5, password=0, force_udp=False, ommit_ping=False)
+            # Fetch settings from DB
+            async with async_session() as db:
+                settings = await crud.get_settings(db)
+                device_ip = settings.device_ip
+                port = settings.port
             
-            logger.info(f"Attempting to connect to {DEVICE_IP}:{DEVICE_PORT}")
+            zk = ZK(device_ip, port=port, timeout=5, password=0, force_udp=False, ommit_ping=False)
+            
+            logger.info(f"Attempting to connect to {device_ip}:{port}")
             
             # Connecting using executor to avoid event loop freeze
             loop = asyncio.get_running_loop()
@@ -37,7 +39,7 @@ async def start_listener():
             
             # Update device status to online 
             async with async_session() as db:
-                await crud.update_device_status(db, DEVICE_IP, online=True)
+                await crud.update_device_status(db, device_ip, online=True)
                 
             # Perform offline sync right after connection
             await on_reconnect()
@@ -88,7 +90,7 @@ async def start_listener():
                 
                 # 1. Write to DB via crud.py
                 async with async_session() as db:
-                    saved_log = await crud.save_punch(db, event, DEVICE_IP)
+                    saved_log = await crud.save_punch(db, event, device_ip)
                     
                     if saved_log:
                         # Fetch user name for the websocket payload
@@ -100,7 +102,7 @@ async def start_listener():
                             "data": {
                                 "user_id": event.user_id,
                                 "name": user.name,
-                                "timestamp": event.timestamp.isoformat(),
+                                "timestamp": saved_log.timestamp.isoformat(),
                                 "punch_type": saved_log.punch_type,
                                 "verify_type": event.verify_type,
                                 "sync_status": "synced"
@@ -111,15 +113,18 @@ async def start_listener():
         except Exception as e:
             logger.error(f"ZKTeco Connection lost or timed out: {e}")
             
+            # Use fallback ip if fetch fails early
+            err_ip = device_ip if 'device_ip' in locals() else "Unknown"
+            
             # Mark device as offline
             async with async_session() as db:
-                await crud.update_device_status(db, DEVICE_IP, online=False)
+                await crud.update_device_status(db, err_ip, online=False)
             
             # Broadcast offline state
             await manager.broadcast({
                 "type": "device_status",
                 "status": "reconnecting",
-                "ip": DEVICE_IP
+                "ip": err_ip
             })
             
             # Wait 10s, retry with exponential backoff, max 5 attempts
@@ -127,11 +132,11 @@ async def start_listener():
             if attempt > max_attempts:
                 logger.warning("Max attempts reached, marking device definitive offline.")
                 async with async_session() as db:
-                    await crud.update_device_status(db, DEVICE_IP, online=False)
+                    await crud.update_device_status(db, err_ip, online=False)
                 await manager.broadcast({
                      "type": "device_status",
                      "status": "offline",
-                     "ip": DEVICE_IP
+                     "ip": err_ip
                 })
             
             # Exponential backoff base 10 seconds: 10, 20, 40, 80, 160

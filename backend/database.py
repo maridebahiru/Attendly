@@ -29,6 +29,22 @@ class Shift(Base):
     start_time_2 = Column(String, nullable=True) # Optional second part of shift
     end_time_2 = Column(String, nullable=True)
     total_hours_required = Column(Float, default=8.0)
+    assigned_days = Column(String, nullable=True, default="Monday,Tuesday,Wednesday,Thursday,Friday")
+
+class AbsenceReport(Base):
+    """Stores staff absence/unavailability reports."""
+    __tablename__ = "absence_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, ForeignKey("users.user_id"), nullable=False, index=True)
+    date = Column(String, nullable=False, index=True) # Store Gregorian date as "YYYY-MM-DD"
+    reason = Column(String, nullable=False) # Sick Leave, Annual Leave, Emergency Leave, Business Trip, Work From Home, Suspended, Other (specified)
+    notes = Column(String, nullable=True)
+    status = Column(String, default="pending") # "pending", "approved", "rejected"
+    submitted_by = Column(String, nullable=False) # Username of Team Leader or Super Admin
+    approved_by = Column(String, nullable=True) # Username of Super Admin
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
 
 class User(Base):
     """Stores user information synced from the device."""
@@ -39,21 +55,30 @@ class User(Base):
     name = Column(String, nullable=False)
     department = Column(String, default="General")
     shift_id = Column(Integer, ForeignKey("shifts.id"), nullable=True)
+    password = Column(String, nullable=True) # Pin/Password for login
+    role = Column(String, default="user")
+    privilege = Column(Integer, default=0) # 0: User, 14: Super Admin
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 class AttendanceLog(Base):
     """Stores individual punch events."""
     __tablename__ = "attendance_logs"
-    __table_args__ = (UniqueConstraint('user_id', 'timestamp', name='_user_timestamp_uc'),)
+    __table_args__ = (UniqueConstraint('user_id', 'original_timestamp', name='_user_original_timestamp_uc'),)
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, ForeignKey("users.user_id"), nullable=False, index=True)
     timestamp = Column(DateTime, nullable=False, index=True)
+    original_timestamp = Column(DateTime, nullable=False, index=True)
     punch_type = Column(String, nullable=False) # "IN" or "OUT"
+    punch_label = Column(String, nullable=True) # "Morning In", "Morning Out", "Afternoon In", "Afternoon Out"
     verify_type = Column(Integer, nullable=False)
     device_ip = Column(String, nullable=False)
     sync_status = Column(String, default="synced") # "synced" or "pending"
     server_timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    # Audit fields
+    edited_by = Column(String, nullable=True)
+    edited_at = Column(DateTime, nullable=True)
 
 class DeviceStatus(Base):
     """Tracks the real-time status of the ZKTeco device."""
@@ -65,6 +90,15 @@ class DeviceStatus(Base):
     last_ping = Column(DateTime, default=datetime.datetime.utcnow)
     missed_count = Column(Integer, default=0)
 
+class DeviceActivity(Base):
+    """Logs history of device connectivity."""
+    __tablename__ = "device_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    device_ip = Column(String, nullable=False)
+    status = Column(String, nullable=False)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+
 class Admin(Base):
     """Stores credentials for system administrators."""
     __tablename__ = "admins"
@@ -73,12 +107,74 @@ class Admin(Base):
     username = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     role = Column(String, default="admin") # "admin" or "super_admin"
+    privileges = Column(String, default="[]") # JSON list of accessible modules
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class SystemSettings(Base):
+    """Global system configuration."""
+    __tablename__ = "system_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entering_time = Column(String, default="08:00")
+    out_time = Column(String, default="17:00")
+    morning_in = Column(String, default="08:00")
+    morning_out = Column(String, default="12:00")
+    afternoon_in = Column(String, default="13:00")
+    afternoon_out = Column(String, default="17:00")
+    off_days = Column(String, default="Saturday,Sunday") # Comma-separated list of day names
+    machine_id = Column(Integer, default=1)
+    port = Column(Integer, default=4370)
+    device_ip = Column(String, default="192.168.10.40")
+
+    # Configurable scan session time ranges
+    morning_in_start = Column(String, default="02:00")
+    morning_in_end = Column(String, default="03:00")
+    morning_out_start = Column(String, default="05:00")
+    morning_out_end = Column(String, default="07:00")
+    afternoon_in_start = Column(String, default="08:00")
+    afternoon_in_end = Column(String, default="09:00")
+    afternoon_out_start = Column(String, default="10:00")
+    afternoon_out_end = Column(String, default="12:00")
+
+class EthiopianHoliday(Base):
+    """Stores fetched Ethiopian public holidays from Calendarific."""
+    __tablename__ = "ethiopian_holidays"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    date = Column(String, unique=True, index=True, nullable=False) # Store Gregorian ISO date "YYYY-MM-DD"
+    type = Column(String, nullable=True) # e.g. "National holiday"
 
 async def init_db():
     """Initializes the database, creating tables if they don't exist."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        
+        # Add new columns to system_settings if they don't exist
+        from sqlalchemy import text
+        new_cols = [
+            ("morning_in_start", "VARCHAR DEFAULT '02:00'"),
+            ("morning_in_end", "VARCHAR DEFAULT '03:00'"),
+            ("morning_out_start", "VARCHAR DEFAULT '05:00'"),
+            ("morning_out_end", "VARCHAR DEFAULT '07:00'"),
+            ("afternoon_in_start", "VARCHAR DEFAULT '08:00'"),
+            ("afternoon_in_end", "VARCHAR DEFAULT '09:00'"),
+            ("afternoon_out_start", "VARCHAR DEFAULT '10:00'"),
+            ("afternoon_out_end", "VARCHAR DEFAULT '12:00'")
+        ]
+        for col_name, col_type in new_cols:
+            try:
+                await conn.execute(text(f"ALTER TABLE system_settings ADD COLUMN {col_name} {col_type}"))
+            except Exception:
+                pass
+        
+        # Ensure default settings exist
+        from sqlalchemy import select
+        async with async_session() as session:
+            result = await session.execute(select(SystemSettings).limit(1))
+            if not result.scalars().first():
+                session.add(SystemSettings())
+                await session.commit()
 
 async def get_db():
     """Dependency to get the database session."""

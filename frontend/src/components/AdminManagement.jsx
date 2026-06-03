@@ -48,9 +48,10 @@ const AdminManagement = () => {
     setSubmitting(true);
     
     try {
+      const trimmedUsername = username.trim();
       const finalPrivs = role === 'super_admin' ? modules.map(m => m.id) : selectedPrivs;
-      await client.post('/admins', { username, password, role, privileges: finalPrivs });
-      setSuccess(`Account for "${username}" created successfully.`);
+      await client.post('/admins', { username: trimmedUsername, password, role, privileges: finalPrivs });
+      setSuccess(`Account for "${trimmedUsername}" created successfully.`);
       setUsername('');
       setPassword('');
       setSelectedPrivs(['dashboard']);

@@ -5,19 +5,34 @@ import { User, Clock, Search, Filter, Calendar } from 'lucide-react';
 export default function AttendanceGrid({ newEventsCount }) {
   const [reportData, setReportData] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [selectedMonth, setSelectedMonth] = useState(null);
+  const [selectedYear, setSelectedYear] = useState(null);
+  const [holidayName, setHolidayName] = useState(null);
   const [nameFilter, setNameFilter] = useState('');
 
+  const ethiopianMonths = [
+    "Meskerem", "Tekemt", "Hedar", "Tahsas", "Ter", "Yekatit",
+    "Megabit", "Miazia", "Ginbot", "Sene", "Hamle", "Nehase", "Pagume"
+  ];
+
   useEffect(() => {
-    // On mount, find the latest date with activity so the dashboard isn't empty
+    // On mount, fetch today's Ethiopian calendar date
     const initDate = async () => {
       try {
-        const res = await client.get('/attendance/latest-date');
-        if (res.data.date) {
-            setSelectedDate(res.data.date);
+        const res = await client.get('/calendar/today');
+        if (res.data) {
+          setSelectedDay(res.data.day);
+          setSelectedMonth(res.data.month);
+          setSelectedYear(res.data.year);
         }
       } catch (e) {
-        console.error("Failed to fetch latest date", e);
+        console.error("Failed to fetch Ethiopian calendar today", e);
+        // Fallback
+        const today = new Date();
+        setSelectedDay(today.getDate());
+        setSelectedMonth(today.getMonth() + 1);
+        setSelectedYear(today.getFullYear());
       }
     };
     initDate();
@@ -26,11 +41,17 @@ export default function AttendanceGrid({ newEventsCount }) {
   const fetchReport = async () => {
     setLoading(true);
     try {
-      let url = `/reports/attendance?target_date=${selectedDate}`;
+      let url = `/reports/attendance?eth_year=${selectedYear}&eth_month=${selectedMonth}&eth_day=${selectedDay}`;
       if (nameFilter) url += `&name=${nameFilter}`;
       
       const response = await client.get(url);
       setReportData(response.data);
+
+      // Extract active holiday if today is a holiday
+      const holidayStatus = response.data.length > 0 
+        ? response.data[0].daily_details?.find(d => d.status.startsWith("Holiday:"))?.status 
+        : null;
+      setHolidayName(holidayStatus ? holidayStatus.replace("Holiday: ", "") : null);
     } catch (error) {
       console.error("Failed to fetch dashboard records", error);
     } finally {
@@ -39,8 +60,10 @@ export default function AttendanceGrid({ newEventsCount }) {
   };
 
   useEffect(() => {
-    fetchReport();
-  }, [selectedDate, nameFilter, newEventsCount]);
+    if (selectedYear && selectedMonth && selectedDay) {
+      fetchReport();
+    }
+  }, [selectedYear, selectedMonth, selectedDay, nameFilter, newEventsCount]);
 
   const getPunchByLabel = (punches, label) => {
     // We now look for the specific persisted label rather than relying on array order
@@ -72,17 +95,55 @@ export default function AttendanceGrid({ newEventsCount }) {
             />
           </div>
           
-          <div className="relative">
-            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-600 pointer-events-none" size={16} />
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="pl-10 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
-            />
-          </div>
+          {selectedDay && selectedMonth && selectedYear && (
+            <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-gray-200 shadow-sm">
+              <Calendar className="text-blue-600 mx-1.5" size={16} />
+              <select
+                value={selectedDay}
+                onChange={(e) => setSelectedDay(parseInt(e.target.value))}
+                className="px-1 py-1 text-xs font-bold text-gray-700 bg-transparent outline-none cursor-pointer"
+              >
+                {selectedMonth === 13 
+                  ? [...Array(6)].map((_, i) => <option key={i+1} value={i+1}>{i+1}</option>)
+                  : [...Array(30)].map((_, i) => <option key={i+1} value={i+1}>{i+1}</option>)
+                }
+              </select>
+              <span className="text-gray-300 text-xs">/</span>
+              <select
+                value={selectedMonth}
+                onChange={(e) => {
+                  const m = parseInt(e.target.value);
+                  setSelectedMonth(m);
+                  if (m === 13 && selectedDay > 6) {
+                    setSelectedDay(5); // Reset to Pagume bounds
+                  }
+                }}
+                className="px-1 py-1 text-xs font-bold text-gray-700 bg-transparent outline-none cursor-pointer"
+              >
+                {ethiopianMonths.map((m, i) => <option key={m} value={i+1}>{m}</option>)}
+              </select>
+              <span className="text-gray-300 text-xs">/</span>
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+                className="px-1 py-1 text-xs font-bold text-gray-700 bg-transparent outline-none cursor-pointer"
+              >
+                {[2016, 2017, 2018, 2019, 2020].map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+          )}
         </div>
       </div>
+
+      {holidayName && (
+        <div className="bg-blue-50 border-b border-blue-100 px-6 py-3 flex items-center gap-3 animate-in slide-in-from-top duration-300 shrink-0">
+          <span className="text-xl">🇪🇹</span>
+          <div className="flex-1">
+            <span className="text-xs font-black text-blue-900 uppercase tracking-wide">Public Holiday today: </span>
+            <span className="text-xs font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-md">{holidayName}</span>
+          </div>
+        </div>
+      )}
 
       {/* Structured Table View */}
       <div className="flex-1 overflow-auto bg-white">
@@ -108,7 +169,8 @@ export default function AttendanceGrid({ newEventsCount }) {
                 </tr>
               ) : (
                 reportData.map((user) => (
-                  <tr key={user.user_id} className="hover:bg-blue-50/30 transition-colors">
+                  <React.Fragment key={user.user_id}>
+                    <tr className="hover:bg-blue-50/30 transition-colors">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex flex-col">
                         <span className="text-sm font-bold text-gray-900">{user.name}</span>
@@ -117,35 +179,64 @@ export default function AttendanceGrid({ newEventsCount }) {
                     </td>
                     
                     <td className="px-6 py-4 text-center whitespace-nowrap">
-                      <span className={`text-sm font-black ${getPunchByLabel(user.punches, "Morning In") ? 'text-blue-600' : 'text-gray-300'}`}>
-                        {getPunchByLabel(user.punches, "Morning In") || '---'}
-                      </span>
+                      <div className="flex flex-col items-center">
+                        <span className={`text-[10px] font-black uppercase mb-1 px-1.5 py-0.5 rounded ${getPunchByLabel(user.punches, "Morning In") ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'}`}>Morning In</span>
+                        <span className={`text-sm font-black ${getPunchByLabel(user.punches, "Morning In") ? 'text-blue-600' : 'text-gray-300'}`}>
+                          {getPunchByLabel(user.punches, "Morning In") || 'Not Scanned'}
+                        </span>
+                      </div>
                     </td>
 
                     <td className="px-6 py-4 text-center whitespace-nowrap">
-                      <span className={`text-sm font-black ${getPunchByLabel(user.punches, "Morning Out") ? 'text-orange-600' : 'text-gray-300'}`}>
-                        {getPunchByLabel(user.punches, "Morning Out") || '---'}
-                      </span>
+                      <div className="flex flex-col items-center">
+                        <span className={`text-[10px] font-black uppercase mb-1 px-1.5 py-0.5 rounded ${getPunchByLabel(user.punches, "Morning Out") ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-400'}`}>Morning Out</span>
+                        <span className={`text-sm font-black ${getPunchByLabel(user.punches, "Morning Out") ? 'text-orange-600' : 'text-gray-300'}`}>
+                          {getPunchByLabel(user.punches, "Morning Out") || 'Not Scanned'}
+                        </span>
+                      </div>
                     </td>
 
                     <td className="px-6 py-4 text-center whitespace-nowrap">
-                      <span className={`text-sm font-black ${getPunchByLabel(user.punches, "Afternoon In") ? 'text-blue-600' : 'text-gray-300'}`}>
-                        {getPunchByLabel(user.punches, "Afternoon In") || '---'}
-                      </span>
+                      <div className="flex flex-col items-center">
+                        <span className={`text-[10px] font-black uppercase mb-1 px-1.5 py-0.5 rounded ${getPunchByLabel(user.punches, "Afternoon In") ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'}`}>Afternoon In</span>
+                        <span className={`text-sm font-black ${getPunchByLabel(user.punches, "Afternoon In") ? 'text-blue-600' : 'text-gray-300'}`}>
+                          {getPunchByLabel(user.punches, "Afternoon In") || 'Not Scanned'}
+                        </span>
+                      </div>
                     </td>
 
                     <td className="px-6 py-4 text-center whitespace-nowrap">
-                      <span className={`text-sm font-black ${getPunchByLabel(user.punches, "Afternoon Out") ? 'text-orange-600' : 'text-gray-300'}`}>
-                        {getPunchByLabel(user.punches, "Afternoon Out") || '---'}
-                      </span>
+                      <div className="flex flex-col items-center">
+                        <span className={`text-[10px] font-black uppercase mb-1 px-1.5 py-0.5 rounded ${getPunchByLabel(user.punches, "Afternoon Out") ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-400'}`}>Afternoon Out</span>
+                        <span className={`text-sm font-black ${getPunchByLabel(user.punches, "Afternoon Out") ? 'text-orange-600' : 'text-gray-300'}`}>
+                          {getPunchByLabel(user.punches, "Afternoon Out") || 'Not Scanned'}
+                        </span>
+                      </div>
                     </td>
                   </tr>
+                  {user.punches?.some(p => p.label === "Unclassified") && (
+                    <tr className="bg-gray-50/50">
+                      <td colSpan="5" className="px-6 py-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-black text-gray-400 uppercase tracking-tighter">Unclassified Scans:</span>
+                          <div className="flex flex-wrap gap-2">
+                            {user.punches.filter(p => p.label === "Unclassified").map((p, idx) => (
+                              <span key={idx} className="bg-gray-200 text-gray-600 px-2 py-0.5 rounded-md text-[11px] font-bold">
+                                {p.time}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 ))
               )}
             </tbody>
           </table>
-        )
-      }</div>
+        )}
+      </div>
     </div>
   );
 }

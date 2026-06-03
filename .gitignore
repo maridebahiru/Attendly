@@ -14,3 +14,8 @@ dist/
 .vscode/
 .idea/
 *.log
+
+# Vite temporary files
+*.mjs
+*.timestamp-*
+vite.config.js.timestamp-*

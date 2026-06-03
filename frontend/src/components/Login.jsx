@@ -19,7 +19,7 @@ export default function Login({ onLogin }) {
     params.append('password', password);
 
     try {
-      const response = await axios.post('http://127.0.0.1:8000/login', params, {
+      const response = await axios.post(`http://${window.location.hostname}:8000/login`, params, {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
         }

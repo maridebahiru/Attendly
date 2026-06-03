@@ -59,35 +59,57 @@ const DeviceHistoryList = () => {
   );
 };
 
-const ReportsDashboard = () => {
+const ReportsDashboard = ({ refreshTrigger }) => {
   const [reportData, setReportData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [viewMode, setViewMode] = useState('daily'); // 'daily' or 'monthly'
-  const [activeTab, setActiveTab] = useState('summary'); // 'summary', 'details', 'missing', 'charts', 'device'
+  const [activeTab, setActiveTab] = useState('details'); // 'summary', 'details', 'missing', 'charts', 'device'
   
-  const [selectedDay, setSelectedDay] = useState(1);
-  const [selectedMonth, setSelectedMonth] = useState(1);
-  const [selectedYear, setSelectedYear] = useState(2016);
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [selectedMonth, setSelectedMonth] = useState(null);
+  const [selectedYear, setSelectedYear] = useState(null);
   const [nameFilter, setNameFilter] = useState('');
+  
+  const ethiopianMonths = useMemo(() => [
+    "Meskerem", "Tekemt", "Hedar", "Tahsas", "Ter", "Yekatit",
+    "Megabit", "Miazia", "Ginbot", "Sene", "Hamle", "Nehase", "Pagume"
+  ], []);
   
   const userRole = localStorage.getItem('user_role');
   const isAdmin = userRole === 'admin' || userRole === 'super_admin';
 
   useEffect(() => {
-    // A simplified initial fetch could set current eth date, but since we don't have it on frontend natively,
-    // we just default to a known year or wait for user to select. We default to 1/1/2016.
+    const initDate = async () => {
+      try {
+        const res = await client.get('/calendar/today');
+        if (res.data) {
+          setSelectedDay(res.data.day);
+          setSelectedMonth(res.data.month);
+          setSelectedYear(res.data.year);
+        }
+      } catch (e) {
+        console.error("Failed to fetch Ethiopian calendar today", e);
+        // Fallback in case of server failure
+        setSelectedDay(new Date().getDate());
+        setSelectedMonth(new Date().getMonth() + 1);
+        setSelectedYear(new Date().getFullYear());
+      }
+    };
+    initDate();
   }, []);
 
   const fetchReport = async () => {
+    if (!selectedYear || !selectedMonth || (viewMode === 'daily' && !selectedDay)) return;
     setLoading(true);
     try {
       let url = `/reports/attendance?`;
       if (viewMode === 'daily') {
         url += `eth_year=${selectedYear}&eth_month=${selectedMonth}&eth_day=${selectedDay}`;
       } else {
-        url += `month=${selectedMonth}&year=${selectedYear}`;
+        url += `eth_year=${selectedYear}&eth_month=${selectedMonth}`;
       }
+      url += `&_t=${Date.now()}`;
       
       const response = await client.get(url);
       setReportData(response.data);
@@ -102,7 +124,7 @@ const ReportsDashboard = () => {
 
   useEffect(() => {
     fetchReport();
-  }, [selectedDay, selectedMonth, selectedYear, viewMode]);
+  }, [selectedDay, selectedMonth, selectedYear, viewMode, refreshTrigger]);
 
   const filteredData = useMemo(() => {
     if (!nameFilter) return reportData;
@@ -221,47 +243,58 @@ const ReportsDashboard = () => {
             <div className="h-8 w-px bg-slate-200 mx-2 hidden sm:block"></div>
 
             {/* Date/Month Picker */}
-            {viewMode === 'daily' ? (
-              <div className="flex gap-2">
-                <select 
-                  value={selectedDay}
-                  onChange={(e) => setSelectedDay(parseInt(e.target.value))}
-                  className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm"
-                >
-                  {[...Array(30)].map((_, i) => <option key={i+1} value={i+1}>{i+1}</option>)}
-                </select>
-                <select 
-                  value={selectedMonth}
-                  onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
-                  className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm"
-                >
-                  {["Meskerem", "Tikimt", "Hidar", "Tahsas", "Tir", "Yekatit", "Megabit", "Miazia", "Ginbot", "Sene", "Hamle", "Nehase", "Pagume"].map((m, i) => <option key={m} value={i+1}>{m}</option>)}
-                </select>
-                <select 
-                  value={selectedYear}
-                  onChange={(e) => setSelectedYear(parseInt(e.target.value))}
-                  className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm"
-                >
-                  {[2016, 2017, 2018].map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                <select 
-                  value={selectedMonth}
-                  onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
-                  className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm"
-                >
-                  {["Meskerem", "Tikimt", "Hidar", "Tahsas", "Tir", "Yekatit", "Megabit", "Miazia", "Ginbot", "Sene", "Hamle", "Nehase", "Pagume"].map((m, i) => <option key={m} value={i+1}>{m}</option>)}
-                </select>
-                <select 
-                  value={selectedYear}
-                  onChange={(e) => setSelectedYear(parseInt(e.target.value))}
-                  className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm"
-                >
-                  {[2016, 2017, 2018].map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
-              </div>
+            {selectedDay && selectedMonth && selectedYear && (
+              viewMode === 'daily' ? (
+                <div className="flex gap-2">
+                  <select 
+                    value={selectedDay}
+                    onChange={(e) => setSelectedDay(parseInt(e.target.value))}
+                    className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm cursor-pointer"
+                  >
+                    {selectedMonth === 13 
+                      ? [...Array(6)].map((_, i) => <option key={i+1} value={i+1}>{i+1}</option>)
+                      : [...Array(30)].map((_, i) => <option key={i+1} value={i+1}>{i+1}</option>)
+                    }
+                  </select>
+                  <select 
+                    value={selectedMonth}
+                    onChange={(e) => {
+                      const m = parseInt(e.target.value);
+                      setSelectedMonth(m);
+                      if (m === 13 && selectedDay > 6) {
+                        setSelectedDay(5); // Reset to Pagume bounds
+                      }
+                    }}
+                    className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm cursor-pointer"
+                  >
+                    {ethiopianMonths.map((m, i) => <option key={m} value={i+1}>{m}</option>)}
+                  </select>
+                  <select 
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+                    className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm cursor-pointer"
+                  >
+                    {[2016, 2017, 2018, 2019, 2020].map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <select 
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
+                    className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm cursor-pointer"
+                  >
+                    {ethiopianMonths.map((m, i) => <option key={m} value={i+1}>{m}</option>)}
+                  </select>
+                  <select 
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+                    className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm cursor-pointer"
+                  >
+                    {[2016, 2017, 2018, 2019, 2020].map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+              )
             )}
 
             {isAdmin && (
@@ -451,79 +484,128 @@ const ReportsDashboard = () => {
 
             {/* TAB CONTENT: DETAILS */}
             {activeTab === 'details' && (
-              <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden animate-in fade-in duration-500">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50/50">
-                      <th className="px-6 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">User Details</th>
-                      <th className="px-6 py-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Mins (worked)</th>
-                      <th className="px-6 py-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">Late Arrival</th>
-                      <th className="px-6 py-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">Early Departure</th>
-                      <th className="px-6 py-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">Overtime</th>
-                      <th className="px-6 py-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {filteredData.map((user) => (
-                      <tr key={user.user_id} className="hover:bg-slate-50/80 transition-colors group">
-                        <td className="px-6 py-5">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-slate-500 font-black text-xs group-hover:bg-blue-600 group-hover:text-white transition-all">
-                              {user.name.charAt(0)}
-                            </div>
-                            <div>
-                               <div className="text-sm font-bold text-slate-900">{user.name}</div>
-                               <div className="text-[10px] font-bold text-slate-400 uppercase">ID: {user.user_id} • {user.department}</div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-5 text-center font-black text-slate-700">
-                          {user.total_hours} <span className="text-[9px] text-slate-400">HRS</span>
-                        </td>
-                        <td className="px-6 py-5 text-center">
-                          {user.late_count > 0 ? (
-                            <div className="flex flex-col items-center">
-                              <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md ring-1 ring-amber-100">
-                                {user.late_count} Times
-                              </span>
-                              <span className="text-[9px] font-bold text-slate-400 mt-1">{user.late_minutes} MINS TOTAL</span>
-                            </div>
-                          ) : (
-                            <span className="text-xs font-bold text-emerald-500">Perfect</span>
-                          )}
-                        </td>
-                        <td className="px-6 py-5 text-center">
-                         {user.early_departure_count > 0 ? (
-                            <div className="flex flex-col items-center">
-                              <span className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md ring-1 ring-rose-100">
-                                {user.early_departure_count} Times
-                              </span>
-                              <span className="text-[9px] font-bold text-slate-400 mt-1">{user.early_departure_minutes} MINS TOTAL</span>
-                            </div>
-                          ) : (
-                            <span className="text-[10px] text-slate-300">—</span>
-                          )}
-                        </td>
-                        <td className="px-6 py-5 text-center">
-                           {user.overtime_hours > 0 ? (
-                              <span className="text-sm font-black text-indigo-600">+{user.overtime_hours} <span className="text-[9px]">HRS</span></span>
-                           ) : (
-                              <span className="text-[10px] text-slate-300">—</span>
-                           )}
-                        </td>
-                        <td className="px-6 py-5 text-center">
-                           <span className={`text-[10px] font-black px-2.5 py-1 rounded-lg uppercase ${
-                             user.status === 'Present' 
-                             ? 'bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100' 
-                             : 'bg-slate-100 text-slate-400'
-                           }`}>
-                             {user.status}
-                           </span>
-                        </td>
+              <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden animate-in fade-in duration-500">
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50/80">
+                        <th className="px-6 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Employee</th>
+                        <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Gregorian Date</th>
+                        <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Morning In</th>
+                        <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Morning Out</th>
+                        <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Afternoon In</th>
+                        <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Afternoon Out</th>
+                        <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Total Hrs</th>
+                        <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Late (min)</th>
+                        <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Early (min)</th>
+                        <th className="px-6 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Status</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {filteredData.flatMap(user => 
+                        user.daily_details.map((day, idx) => ({
+                          ...day,
+                          rowKey: `${user.user_id}-${day.date}-${idx}`
+                        }))
+                      ).map((row) => (
+                        <tr key={row.rowKey} className="hover:bg-slate-50/50 transition-colors group">
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 bg-slate-100 rounded-xl flex items-center justify-center text-slate-600 font-black text-xs group-hover:bg-blue-600 group-hover:text-white transition-all">
+                                {row.employee_name.charAt(0)}
+                              </div>
+                              <div className="flex flex-col">
+                                <span className="text-sm font-black text-slate-800">{row.employee_name}</span>
+                                <span className="text-[10px] font-bold text-slate-400 uppercase">ID: {row.employee_id}</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 text-center">
+                            <div className="text-xs font-black text-slate-600 bg-slate-50 px-2 py-1 rounded-lg inline-block">
+                              {row.date}
+                            </div>
+                          </td>
+                          {/* Morning In */}
+                          <td className="px-4 py-4 text-center">
+                            <div className="flex flex-col gap-1">
+                              <span className={`text-xs font-black ${row.morning_in === 'Not Scanned' ? 'text-slate-300' : 'text-slate-700'}`}>{row.morning_in}</span>
+                              {row.morning_in !== 'Not Scanned' && (
+                                <span className={`text-[9px] font-black uppercase ${row.morning_in_status === 'On Time' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                  {row.morning_in_status}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          {/* Morning Out */}
+                          <td className="px-4 py-4 text-center">
+                            <div className="flex flex-col gap-1">
+                              <span className={`text-xs font-black ${row.morning_out === 'Not Scanned' ? 'text-slate-300' : 'text-slate-700'}`}>{row.morning_out}</span>
+                              {row.morning_out !== 'Not Scanned' && (
+                                <span className={`text-[9px] font-black uppercase ${row.morning_out_status === 'On Time' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                  {row.morning_out_status}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          {/* Afternoon In */}
+                          <td className="px-4 py-4 text-center">
+                            <div className="flex flex-col gap-1">
+                              <span className={`text-xs font-black ${row.afternoon_in === 'Not Scanned' ? 'text-slate-300' : 'text-slate-700'}`}>{row.afternoon_in}</span>
+                              {row.afternoon_in !== 'Not Scanned' && (
+                                <span className={`text-[9px] font-black uppercase ${row.afternoon_in_status === 'On Time' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                  {row.afternoon_in_status}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          {/* Afternoon Out */}
+                          <td className="px-4 py-4 text-center">
+                            <div className="flex flex-col gap-1">
+                              <span className={`text-xs font-black ${row.afternoon_out === 'Not Scanned' ? 'text-slate-300' : 'text-slate-700'}`}>{row.afternoon_out}</span>
+                              {row.afternoon_out !== 'Not Scanned' && (
+                                <span className={`text-[9px] font-black uppercase ${row.afternoon_out_status === 'On Time' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                  {row.afternoon_out_status}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          {/* Total Hrs */}
+                          <td className="px-4 py-4 text-center">
+                            <span className="text-xs font-black text-slate-700 bg-slate-50 px-2 py-1 rounded-lg">
+                              {row.total_hours}h
+                            </span>
+                          </td>
+                          {/* Late Mins */}
+                          <td className="px-4 py-4 text-center">
+                            <span className={`text-xs font-black ${row.late_minutes > 0 ? 'text-rose-600 bg-rose-50' : 'text-slate-400 bg-slate-50'} px-2 py-1 rounded-lg`}>
+                              {row.late_minutes}m
+                            </span>
+                          </td>
+                          {/* Early Mins */}
+                          <td className="px-4 py-4 text-center">
+                            <span className={`text-xs font-black ${row.early_departure_minutes > 0 ? 'text-amber-600 bg-amber-50' : 'text-slate-400 bg-slate-50'} px-2 py-1 rounded-lg`}>
+                              {row.early_departure_minutes}m
+                            </span>
+                          </td>
+                          {/* Status */}
+                          <td className="px-6 py-4 text-center">
+                             <span className={`text-[10px] font-black px-2.5 py-1 rounded-xl uppercase tracking-wider ring-1 ${
+                               row.status === 'Present'
+                               ? 'bg-emerald-50 text-emerald-600 ring-emerald-100' 
+                               : row.status === 'Half Day'
+                               ? 'bg-amber-50 text-amber-600 ring-amber-100'
+                               : row.status === 'Off Day'
+                               ? 'bg-slate-50 text-slate-400 ring-slate-100'
+                               : 'bg-rose-50 text-rose-600 ring-rose-100'
+                             }`}>
+                               {row.status}
+                             </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 

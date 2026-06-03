@@ -34,7 +34,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return encoded_jwt
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
-    from database import Admin, async_session # late import to avoid issues
+    from database import Admin, User, async_session # late import
     
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -44,22 +44,43 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
+        role: str = payload.get("role")
         if username is None:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
 
     async with async_session() as session:
-        result = await session.execute(select(Admin).filter(Admin.username == username))
-        user = result.scalars().first()
-        if user is None:
-            raise credentials_exception
-        return user
+        # Default to checking Admin if role is missing or explicit admin/super_admin
+        if role in ["admin", "super_admin"] or role is None:
+            from sqlalchemy import func
+            result = await session.execute(select(Admin).filter(func.lower(Admin.username) == username.lower()))
+            user = result.scalars().first()
+            if user:
+                return user
+                
+        # If not found in Admin or role was 'user', check the User table
+        if role == "user" or role is None:
+            result = await session.execute(select(User).filter(User.user_id == username))
+            user = result.scalars().first()
+            if user:
+                return user
+            
+        raise credentials_exception
 
 def check_super_admin(current_user = Depends(get_current_user)):
     if current_user.role != "super_admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Operation restricted to Super Admins only"
+        )
+    return current_user
+
+def check_admin(current_user = Depends(get_current_user)):
+    role = getattr(current_user, 'role', None)
+    if role not in ["admin", "super_admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operation restricted to Admins only"
         )
     return current_user

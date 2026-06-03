@@ -3,11 +3,11 @@ from sqlalchemy.future import select
 from sqlalchemy import desc
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 import schemas
 from ethiopian_date import gregorian_to_ethiopian, ethiopian_to_gregorian
-from database import User, AttendanceLog, DeviceStatus, SystemSettings, Shift
+from database import User, AttendanceLog, DeviceStatus, SystemSettings, Shift, AbsenceReport, EthiopianHoliday
 
 async def get_or_create_user(db: AsyncSession, user_id: str, name: str = "Unknown") -> User:
     """Sync user from device, creating them if they do not exist."""
@@ -34,17 +34,39 @@ async def get_or_create_user(db: AsyncSession, user_id: str, name: str = "Unknow
         
     return user
 
+def classify_punch_time(l_time, settings) -> str:
+    from datetime import time
+    def parse_time(t_str):
+        h, m = map(int, t_str.split(':'))
+        return time(h, m)
+    
+    try:
+        if parse_time(settings.morning_in_start) <= l_time <= parse_time(settings.morning_in_end):
+            return "Morning In"
+        elif parse_time(settings.morning_out_start) <= l_time <= parse_time(settings.morning_out_end):
+            return "Morning Out"
+        elif parse_time(settings.afternoon_in_start) <= l_time <= parse_time(settings.afternoon_in_end):
+            return "Afternoon In"
+        elif parse_time(settings.afternoon_out_start) <= l_time <= parse_time(settings.afternoon_out_end):
+            return "Afternoon Out"
+    except Exception:
+        pass
+    return "Unclassified"
+
 async def save_punch(db: AsyncSession, event: schemas.PunchEvent, device_ip: str) -> Optional[AttendanceLog]:
     """Upsert attendance log, prevent duplicates, and auto-toggle punch status (IN/OUT)."""
     # Ensure user exists before saving punch
     await get_or_create_user(db, event.user_id)
     
-    # 1. Determine local today's bounds
-    now = datetime.now()
-    start_of_day = datetime.combine(now.date(), datetime.min.time())
-    end_of_day = datetime.combine(now.date(), datetime.max.time().replace(microsecond=999999))
+    # 1. Determine standard today's bounds (using Ethiopian day bounds)
+    # event.timestamp is the raw Ethiopian timestamp from the device
+    corrected_timestamp = event.timestamp + timedelta(hours=6)
+    eth_day = event.timestamp.date()
+    
+    start_of_day = datetime.combine(eth_day, datetime.min.time()) + timedelta(hours=6)
+    end_of_day = datetime.combine(eth_day, datetime.max.time().replace(microsecond=999999)) + timedelta(hours=6)
 
-    # 2. Fetch the absolute last punch for this user TODAY to decide the toggle
+    # 2. Fetch the absolute last punch for this user TODAY (same Ethiopian day) to decide the toggle
     last_punch_query = (
         select(AttendanceLog)
         .filter(AttendanceLog.user_id == event.user_id, 
@@ -56,28 +78,19 @@ async def save_punch(db: AsyncSession, event: schemas.PunchEvent, device_ip: str
     result = await db.execute(last_punch_query)
     last_log = result.scalars().first()
 
-    # 3. Logic: Determine sequential label and toggle status
-    # We count existing logs for this user today to determine the original sequence
-    from sqlalchemy import func
-    count_result = await db.execute(
-        select(func.count(AttendanceLog.id))
-        .filter(AttendanceLog.user_id == event.user_id, 
-                AttendanceLog.timestamp >= start_of_day,
-                AttendanceLog.timestamp <= end_of_day)
-    )
-    punch_count = count_result.scalar() or 0
-    
-    labels = ["Morning In", "Morning Out", "Afternoon In", "Afternoon Out"]
-    punch_label = labels[punch_count] if punch_count < len(labels) else f"Extra {punch_count + 1}"
-
+    # Determine toggle status
     if last_log and last_log.punch_type == "IN":
         punch_type_str = "OUT"
     else:
         punch_type_str = "IN"
 
+    # Get settings for range checks
+    settings = await get_settings(db)
+    punch_label = classify_punch_time(corrected_timestamp.time(), settings)
+
     log = AttendanceLog(
         user_id=event.user_id,
-        timestamp=event.timestamp,
+        timestamp=corrected_timestamp,
         original_timestamp=event.timestamp,
         punch_type=punch_type_str,
         punch_label=punch_label,
@@ -89,9 +102,12 @@ async def save_punch(db: AsyncSession, event: schemas.PunchEvent, device_ip: str
     try:
         await db.commit()
         await db.refresh(log)
+        # Reclassify to ensure perfect chronological labels!
+        await reclassify_all_punches(db)
+        await db.refresh(log)
         return log
     except IntegrityError:
-        # Duplicate record caught by the unique constraint (user_id, timestamp)
+        # Duplicate record caught by the unique constraint (user_id, original_timestamp)
         await db.rollback()
         return None  # Indicates duplicate
 
@@ -100,9 +116,9 @@ async def get_logs(db: AsyncSession, target_date: Optional[date] = None, user_id
     query = select(AttendanceLog, User.name).join(User, AttendanceLog.user_id == User.user_id)
     
     if target_date:
-        # Filter by date (ignoring time)
-        start_of_day = datetime.combine(target_date, datetime.min.time())
-        end_of_day = datetime.combine(target_date, datetime.max.time().replace(microsecond=999999))
+        # Filter by Ethiopian day bounds (which are standard time bounds shifted by +6 hours)
+        start_of_day = datetime.combine(target_date, datetime.min.time()) + timedelta(hours=6)
+        end_of_day = datetime.combine(target_date, datetime.max.time().replace(microsecond=999999)) + timedelta(hours=6)
         query = query.filter(AttendanceLog.timestamp >= start_of_day, AttendanceLog.timestamp <= end_of_day)
         
     if user_id:
@@ -225,8 +241,8 @@ async def get_attendance_report(
     target_date: Optional[date] = None
 ) -> List[dict]:
     """Generate an enhanced report with worked hours, late minutes, early departures, and missing punches.
-    Supports Ethiopian Calendar dates if month/year/target_date are provided as Ethiopian."""
-    from database import Shift
+    Updated to support custom shifts (2-punch single sessions, assigned days) and approved absences."""
+    from database import Shift, AbsenceReport
     from datetime import date as d_type, time as t_type, datetime as dt_type
     import calendar
     
@@ -246,41 +262,36 @@ async def get_attendance_report(
     shifts_result = await db.execute(select(Shift))
     shifts = {s.id: s for s in shifts_result.scalars().all()}
     
-    report = []
-    
-    # 4. Define date range (Input is Ethiopian or Gregorian target_date)
-    if month and year:
-        # Determine number of days in Ethiopian month
-        if month <= 12:
-            last_day = 30
+    # 4. Define date range
+    if eth_year and eth_month:
+        if eth_day:
+            # Daily report for specific Ethiopian date
+            target_date = ethiopian_to_gregorian(eth_year, eth_month, eth_day)
+            start_date_g = target_date
+            end_date_g = target_date
         else:
-            # 13th month
-            if (year + 1) % 4 == 0:
-                last_day = 6
-            else:
-                last_day = 5
-        
-        start_date_eth = (year, month, 1)
-        end_date_eth = (year, month, last_day)
-        # Convert Ethiopian range to Gregorian range for DB query
-        start_date_g = ethiopian_to_gregorian(*start_date_eth)
-        end_date_g = ethiopian_to_gregorian(*end_date_eth)
-    elif eth_year and eth_month and eth_day:
-        start_date_g = ethiopian_to_gregorian(eth_year, eth_month, eth_day)
-        end_date_g = start_date_g
+            # Monthly report for specific Ethiopian month
+            start_date_g = ethiopian_to_gregorian(eth_year, eth_month, 1)
+            # Find last day of Ethiopian month (Pagume is 13th month, has 5 or 6 days depending on leap year)
+            last_day = 30
+            if eth_month == 13:
+                is_leap = (eth_year % 4 == 3)
+                last_day = 6 if is_leap else 5
+            end_date_g = ethiopian_to_gregorian(eth_year, eth_month, last_day)
     elif target_date:
         start_date_g = target_date
         end_date_g = target_date
+    elif month and year:
+        _, last_day = calendar.monthrange(year, month)
+        start_date_g = d_type(year, month, 1)
+        end_date_g = d_type(year, month, last_day)
     else:
-        # Default to today Gregorian
         start_date_g = date.today()
         end_date_g = start_date_g
 
+    start_bounds = dt_type.combine(start_date_g, t_type.min) + timedelta(hours=6)
+    end_bounds = dt_type.combine(end_date_g, t_type.max.replace(microsecond=999999)) + timedelta(hours=6)
     
-    start_bounds = dt_type.combine(start_date_g, t_type.min)
-    end_bounds = dt_type.combine(end_date_g, t_type.max.replace(microsecond=999999))
-    
-    # Pre-fetch all logs in range to avoid N+1 queries
     all_logs_query = select(AttendanceLog).filter(
         AttendanceLog.timestamp >= start_bounds, 
         AttendanceLog.timestamp <= end_bounds
@@ -288,144 +299,252 @@ async def get_attendance_report(
     all_logs_result = await db.execute(all_logs_query)
     all_logs = all_logs_result.scalars().all()
     
+    # Fetch approved absence reports for the date range
+    absence_query = select(AbsenceReport).filter(
+        AbsenceReport.date >= start_date_g.isoformat(),
+        AbsenceReport.date <= end_date_g.isoformat(),
+        AbsenceReport.status == "approved"
+    )
+    absence_result = await db.execute(absence_query)
+    absences = absence_result.scalars().all()
+    
+    absence_lookup = {}
+    for abs_rep in absences:
+        if abs_rep.user_id not in absence_lookup:
+            absence_lookup[abs_rep.user_id] = {}
+        absence_lookup[abs_rep.user_id][abs_rep.date] = abs_rep.reason
+    
+    # Fetch public holidays for the date range
+    holidays_query = select(EthiopianHoliday).filter(
+        EthiopianHoliday.date >= start_date_g.isoformat(),
+        EthiopianHoliday.date <= end_date_g.isoformat()
+    )
+    holidays_result = await db.execute(holidays_query)
+    holidays = {h.date: h.name for h in holidays_result.scalars().all()}
+
     logs_by_user = {}
     for log in all_logs:
         if log.user_id not in logs_by_user:
             logs_by_user[log.user_id] = {}
-        d = log.timestamp.date()
+        # Group by Ethiopian day date
+        d = (log.timestamp - timedelta(hours=6)).date()
         if d not in logs_by_user[log.user_id]:
             logs_by_user[log.user_id][d] = []
         logs_by_user[log.user_id][d].append(log)
-
-    # List of Gregorian days in range
+    
     g_days = []
     curr = start_date_g
     while curr <= end_date_g:
         g_days.append(curr)
         curr += timedelta(days=1)
 
+    def calc_stat(actual_dt, target_str, p_type="IN"):
+        if not actual_dt: return "Absent", 0
+        try:
+            target_h, target_m = map(int, target_str.split(':'))
+            t_dt = dt_type.combine(actual_dt.date(), t_type(target_h, target_m))
+            if p_type == "IN":
+                diff = (actual_dt - t_dt).total_seconds() / 60
+                if diff > 20: return "Late", int(diff - 20)
+                return "On Time", 0
+            else: # OUT
+                diff = (t_dt - actual_dt).total_seconds() / 60
+                if diff > 0: return "Early Departure", int(diff)
+                return "On Time", 0
+        except: return "Unknown", 0
+
+    report = []
     for user in users:
         user_logs = logs_by_user.get(user.user_id, {})
-        
-        total_seconds = 0
-        total_late_minutes = 0
-        total_early_departure_minutes = 0
-        late_count = 0
-        early_departure_count = 0
-        missing_punch_days = 0
-        days_present = 0
-        days_absent = 0
-        all_punches = []
+        user_daily_records = []
         
         shift = shifts.get(user.shift_id)
-        # Use global settings if no shift
-        s_start_time = shift.start_time_1 if shift else settings.entering_time
-        s_end_time = shift.end_time_1 if shift else settings.out_time
-        s_req_hours = shift.total_hours_required if shift else 8.0
+        
+        # Session Target Times
+        m_in_t = shift.start_time_1 if shift else settings.morning_in
+        m_out_t = shift.end_time_1 if shift else settings.morning_out
+        a_in_t = shift.start_time_2 if (shift and shift.start_time_2) else settings.afternoon_in
+        a_out_t = shift.end_time_2 if (shift and shift.end_time_2) else settings.afternoon_out
+        
+        is_two_punch = shift is not None and not shift.start_time_2
+
+        u_total_hrs = 0
+        u_late_mins = 0
+        u_early_mins = 0
+        u_present_days = 0
 
         for d in g_days:
-            # Check if this Gregorian day is an Ethiopian off-day
-            eth_d = gregorian_to_ethiopian(d)
-            # Weekday mapping: Gregorian week matches Ethiopian week order
-            day_name = d.strftime("%A") 
-            is_off_day = day_name in off_days
+            day_name = d.strftime("%A")
             
-            day_logs = user_logs.get(d, [])
-            day_seconds = 0
-            
-            if not day_logs:
-                if not is_off_day:
-                    days_absent += 1
-                continue
-            
-            days_present += 1
-            
-            # Missing Punches Check
-            if len(day_logs) % 2 != 0:
-                missing_punch_days += 1
-
-            try:
-                # Late Arrival Calculation
-                shift_h, shift_m = map(int, s_start_time.split(':'))
-                first_punch = day_logs[0]
-                if first_punch.punch_type == "IN":
-                    fp_time = first_punch.timestamp.time()
-                    shift_start = t_type(shift_h, shift_m)
-                    if fp_time > shift_start:
-                        diff = dt_type.combine(d, fp_time) - dt_type.combine(d, shift_start)
-                        mins = int(diff.total_seconds() / 60)
-                        if mins > 2: # 2 min grace
-                            late_count += 1
-                            total_late_minutes += mins
+            # Determine off-days based on shift assigned days vs global off-days
+            if shift and shift.assigned_days:
+                user_assigned_days = [day.strip() for day in shift.assigned_days.split(",") if day.strip()]
+                is_off = day_name not in user_assigned_days
+            else:
+                is_off = day_name in off_days
                 
-                # Early Departure Calculation
-                last_punch = day_logs[-1]
-                if last_punch.punch_type == "OUT":
-                    lp_time = last_punch.timestamp.time()
-                    shift_end_h, shift_end_m = map(int, s_end_time.split(':'))
-                    shift_end = t_type(shift_end_h, shift_end_m)
-                    if lp_time < shift_end:
-                        diff = dt_type.combine(d, shift_end) - dt_type.combine(d, lp_time)
-                        mins = int(diff.total_seconds() / 60)
-                        if mins > 2:
-                            early_departure_count += 1
-                            total_early_departure_minutes += mins
-            except Exception:
-                pass
-
-            # Work Duration Calculation
-            for i in range(0, len(day_logs) - 1, 2):
-                if day_logs[i].punch_type == "IN" and day_logs[i+1].punch_type == "OUT":
-                    duration = day_logs[i+1].timestamp - day_logs[i].timestamp
-                    day_seconds += duration.total_seconds()
+            day_logs = sorted(user_logs.get(d, []), key=lambda x: x.timestamp)
             
-            for log in day_logs:
-                all_punches.append({
-                    "date": eth_d.to_isoformat(), # Return Ethiopian date
-                    "time": log.timestamp.strftime("%H:%M:%S"), 
-                    "type": log.punch_type,
-                    "label": log.punch_label,
-                    "id": log.id
+            p_map = {"Morning In": None, "Morning Out": None, "Afternoon In": None, "Afternoon Out": None}
+            unclassified_logs = []
+            
+            if is_two_punch:
+                # 2-punch single session shift
+                if len(day_logs) > 0:
+                    p_map["Morning In"] = day_logs[0]
+                if len(day_logs) > 1:
+                    p_map["Morning Out"] = day_logs[-1]
+                if len(day_logs) > 2:
+                    unclassified_logs = day_logs[1:-1]
+            else:
+                # Default 4-punch system settings or 2-session shift
+                # The first scan of the day must always be Morning In
+                # Second scan -> Morning Out
+                # Third scan -> Afternoon In
+                # Fourth scan -> Afternoon Out
+                # Do not skip or misassign any session slot
+                slots = ["Morning In", "Morning Out", "Afternoon In", "Afternoon Out"]
+                for idx, log in enumerate(day_logs):
+                    if idx < 4:
+                        p_map[slots[idx]] = log
+                    else:
+                        unclassified_logs.append(log)
+
+            # Calculate Statuses based on these classified punches
+            if is_two_punch:
+                mi_s, mi_m = calc_stat(p_map["Morning In"].timestamp if p_map["Morning In"] else None, m_in_t, "IN")
+                mo_s, mo_m = calc_stat(p_map["Morning Out"].timestamp if p_map["Morning Out"] else None, m_out_t, "OUT")
+                ai_s, ai_m = "On Time", 0
+                ao_s, AO_m = "On Time", 0
+                
+                day_sec = 0
+                if p_map["Morning In"] and p_map["Morning Out"]:
+                    day_sec += (p_map["Morning Out"].timestamp - p_map["Morning In"].timestamp).total_seconds()
+                day_hrs = round(max(0, day_sec / 3600), 2)
+                
+                scan_count = len([p for p in [p_map["Morning In"], p_map["Morning Out"]] if p])
+                if scan_count == 2: d_status = "Present"
+                elif scan_count > 0: d_status = "Half Day"
+                else: d_status = "Absent"
+            else:
+                mi_s, mi_m = calc_stat(p_map["Morning In"].timestamp if p_map["Morning In"] else None, m_in_t, "IN")
+                mo_s, mo_m = calc_stat(p_map["Morning Out"].timestamp if p_map["Morning Out"] else None, m_out_t, "OUT")
+                ai_s, ai_m = calc_stat(p_map["Afternoon In"].timestamp if p_map["Afternoon In"] else None, a_in_t, "IN")
+                ao_s, AO_m = calc_stat(p_map["Afternoon Out"].timestamp if p_map["Afternoon Out"] else None, a_out_t, "OUT")
+
+                day_sec = 0
+                if p_map["Morning In"] and p_map["Morning Out"]:
+                    day_sec += (p_map["Morning Out"].timestamp - p_map["Morning In"].timestamp).total_seconds()
+                if p_map["Afternoon In"] and p_map["Afternoon Out"]:
+                    day_sec += (p_map["Afternoon Out"].timestamp - p_map["Afternoon In"].timestamp).total_seconds()
+                
+                day_hrs = round(max(0, day_sec / 3600), 2)
+                
+                scan_count = len([p for p in p_map.values() if p])
+                if scan_count == 4: d_status = "Present"
+                elif scan_count > 0: d_status = "Half Day"
+                else: d_status = "Absent"
+            
+            # Check for approved absence report to override status
+            user_holiday = holidays.get(d.isoformat())
+            user_abs_reason = absence_lookup.get(user.user_id, {}).get(d.isoformat())
+            if user_abs_reason:
+                d_status = user_abs_reason
+                mi_s, mi_m = "On Time", 0
+                mo_s, mo_m = "On Time", 0
+                ai_s, ai_m = "On Time", 0
+                ao_s, AO_m = "On Time", 0
+                day_hrs = 0.0
+            elif user_holiday:
+                d_status = f"Holiday: {user_holiday}"
+                mi_s, mi_m = "On Time", 0
+                mo_s, mo_m = "On Time", 0
+                ai_s, ai_m = "On Time", 0
+                ao_s, AO_m = "On Time", 0
+                day_hrs = 0.0
+            
+            if is_off and scan_count == 0 and not user_abs_reason and not user_holiday: 
+                d_status = "Off Day"
+                
+            if d_status in ["Present", "Half Day"]: 
+                u_present_days += 1
+                
+            u_total_hrs += day_hrs
+            u_late_mins += (mi_m + ai_m)
+            u_early_mins += (mo_m + AO_m)
+
+            # Ethiopian formatting conversions
+            eth_date_obj = gregorian_to_ethiopian(d)
+            eth_date_str = f"{eth_date_obj.year}-{eth_date_obj.month:02d}-{eth_date_obj.day:02d}"
+            
+            def format_eth_time(dt) -> str:
+                if not dt: return "Not Scanned"
+                # Display standard time (with the 6-hour shift included)
+                return dt.strftime("%H:%M:%S")
+
+            user_daily_records.append({
+                "date": eth_date_str,
+                "employee_name": user.name,
+                "employee_id": user.user_id,
+                "morning_in": format_eth_time(p_map["Morning In"].timestamp) if p_map["Morning In"] else "Not Scanned",
+                "morning_in_status": mi_s,
+                "morning_out": format_eth_time(p_map["Morning Out"].timestamp) if p_map["Morning Out"] else "Not Scanned",
+                "morning_out_status": mo_s,
+                "afternoon_in": format_eth_time(p_map["Afternoon In"].timestamp) if p_map["Afternoon In"] else "Not Scanned",
+                "afternoon_in_status": ai_s,
+                "afternoon_out": format_eth_time(p_map["Afternoon Out"].timestamp) if p_map["Afternoon Out"] else "Not Scanned",
+                "afternoon_out_status": ao_s,
+                "total_hours": day_hrs,
+                "status": d_status,
+                "late_minutes": mi_m + ai_m,
+                "early_departure_minutes": mo_m + AO_m,
+                "unclassified_scans": [format_eth_time(l.timestamp) for l in unclassified_logs]
+            })
+
+        # Calculate user-level summary counts
+        u_late_count = sum(1 for dr in user_daily_records if dr["late_minutes"] > 0)
+        u_early_count = sum(1 for dr in user_daily_records if dr["early_departure_minutes"] > 0)
+        u_missing_punches = sum(1 for dr in user_daily_records if dr["status"] == "Half Day")
+
+        # For Dashboard (AttendanceGrid), we want the latest day's punches
+        latest_punches = []
+        if user_daily_records:
+            last_day = user_daily_records[-1]
+            for label in ["Morning In", "Morning Out", "Afternoon In", "Afternoon Out"]:
+                key = label.lower().replace(" ", "_")
+                latest_punches.append({
+                    "label": label,
+                    "time": last_day[key] if last_day[key] != "Not Scanned" else ""
                 })
-            
-            total_seconds += day_seconds
-            
-        hours_worked = round(total_seconds / 3600, 2)
-        overtime_hours = 0.0
-        # Calculate overtime only if present
-        for d, day_logs in user_logs.items():
-            day_sec = 0
-            for i in range(0, len(day_logs) - 1, 2):
-                if day_logs[i].punch_type == "IN" and day_logs[i+1].punch_type == "OUT":
-                    day_sec += (day_logs[i+1].timestamp - day_logs[i].timestamp).total_seconds()
-            
-            day_hrs = day_sec / 3600
-            if day_hrs > s_req_hours:
-                overtime_hours += (day_hrs - s_req_hours)
+            # Also add unclassified if any
+            for ut in last_day.get("unclassified_scans", []):
+                latest_punches.append({
+                    "label": "Unclassified",
+                    "time": ut
+                })
 
-        status = "Present" if days_present > 0 else "Absent"
-        if days_absent > 0 and days_present > 0:
-            status = "Partial"
-            
         report.append({
             "user_id": user.user_id,
             "name": user.name,
             "department": user.department,
-            "total_hours": hours_worked,
-            "days_present": days_present,
-            "days_absent": days_absent,
-            "late_count": late_count,
-            "late_minutes": total_late_minutes,
-            "early_departure_count": early_departure_count,
-            "early_departure_minutes": total_early_departure_minutes,
-            "missing_punches": missing_punch_days,
-            "overtime_hours": round(overtime_hours, 2),
-            "shift_name": shift.name if shift else "Global Settings",
-            "daily_required": s_req_hours,
-            "total_required": round(s_req_hours * (days_present + days_absent), 2),
-            "status": status,
-            "punches": all_punches
+            "total_hours": round(u_total_hrs, 2),
+            "late_minutes": u_late_mins,
+            "late_count": u_late_count,
+            "early_departure_minutes": u_early_mins,
+            "early_departure_count": u_early_count,
+            "missing_punches": u_missing_punches,
+            "days_present": u_present_days,
+            "status": "Present" if u_present_days > 0 else ("Absent" if not user_daily_records else user_daily_records[-1]["status"]),
+            "daily_details": user_daily_records,
+            "punches": latest_punches
         })
+
+        
+    return report
+
+        
+    return report
+
         
     return report
 
@@ -451,3 +570,119 @@ async def update_attendance_log(db: AsyncSession, log_id: int, update_data: sche
     await db.commit()
     await db.refresh(log)
     return log
+
+async def create_absence_report(db: AsyncSession, report: schemas.AbsenceReportCreate, username: str) -> AbsenceReport:
+    """Create a new staff absence/unavailability report."""
+    db_report = AbsenceReport(
+        user_id=report.user_id,
+        date=report.date,
+        reason=report.reason,
+        notes=report.notes,
+        status="pending",
+        submitted_by=username
+    )
+    db.add(db_report)
+    await db.commit()
+    await db.refresh(db_report)
+    return db_report
+
+async def get_absence_reports(db: AsyncSession, user_id: Optional[str] = None) -> List[tuple]:
+    """Get all absence reports with user names."""
+    query = select(AbsenceReport, User.name).join(User, AbsenceReport.user_id == User.user_id)
+    if user_id:
+        query = query.filter(AbsenceReport.user_id == user_id)
+    query = query.order_by(desc(AbsenceReport.date))
+    result = await db.execute(query)
+    return result.all()
+
+async def update_absence_report(db: AsyncSession, report_id: int, update_data: schemas.AbsenceReportUpdate, username: str) -> Optional[AbsenceReport]:
+    """Update details or approval status of an absence report."""
+    result = await db.execute(select(AbsenceReport).filter(AbsenceReport.id == report_id))
+    report = result.scalars().first()
+    if not report:
+        return None
+        
+    data = update_data.model_dump(exclude_unset=True)
+    for key, val in data.items():
+        setattr(report, key, val)
+        
+    if "status" in data:
+        report.approved_by = username
+        
+    await db.commit()
+    await db.refresh(report)
+    return report
+
+async def reclassify_all_punches(db: AsyncSession):
+    """Reclassify all database logs chronologically and apply the 6 hours Ethiopian time conversion if not yet applied."""
+    from database import AttendanceLog, User, Shift
+    from sqlalchemy import select
+    
+    # 1. Fetch all users and shifts to know if they have custom 2-punch shifts
+    users_result = await db.execute(select(User))
+    users_dict = {u.user_id: u.shift_id for u in users_result.scalars().all()}
+    
+    shifts_result = await db.execute(select(Shift))
+    shifts_dict = {s.id: s for s in shifts_result.scalars().all()}
+
+    # 2. Fetch all attendance logs sorted by user and timestamp
+    result = await db.execute(select(AttendanceLog).order_by(AttendanceLog.user_id, AttendanceLog.timestamp))
+    logs = result.scalars().all()
+    
+    # 3. Apply Ethiopian time conversion (add 6 hours to timestamp if timestamp == original_timestamp)
+    updated = False
+    logs_by_user_day = {}
+    for log in logs:
+        # Check if 6 hours shift needs to be applied
+        if log.timestamp == log.original_timestamp:
+            log.timestamp = log.original_timestamp + timedelta(hours=6)
+            updated = True
+            
+        # Group by user and Ethiopian day date
+        day = (log.timestamp - timedelta(hours=6)).date()
+        key = (log.user_id, day)
+        if key not in logs_by_user_day:
+            logs_by_user_day[key] = []
+        logs_by_user_day[key].append(log)
+        
+    # 4. For each user-day group, sort chronologically and assign punch labels & punch types
+    for key, day_logs in logs_by_user_day.items():
+        user_id = key[0]
+        shift_id = users_dict.get(user_id)
+        shift = shifts_dict.get(shift_id) if shift_id else None
+        is_two_punch = shift is not None and not shift.start_time_2
+        
+        # Sort logs chronologically
+        day_logs.sort(key=lambda x: x.timestamp)
+        
+        if is_two_punch:
+            # 2-punch shift: 1st is Morning In, last is Morning Out, others Unclassified
+            if len(day_logs) > 0:
+                if day_logs[0].punch_label != "Morning In" or day_logs[0].punch_type != "IN":
+                    day_logs[0].punch_label = "Morning In"
+                    day_logs[0].punch_type = "IN"
+                    updated = True
+            if len(day_logs) > 1:
+                if day_logs[-1].punch_label != "Morning Out" or day_logs[-1].punch_type != "OUT":
+                    day_logs[-1].punch_label = "Morning Out"
+                    day_logs[-1].punch_type = "OUT"
+                    updated = True
+            for log in day_logs[1:-1]:
+                if log.punch_label != "Unclassified" or log.punch_type != "IN":
+                    log.punch_label = "Unclassified"
+                    log.punch_type = "IN"
+                    updated = True
+        else:
+            # Default 4-punch chronological
+            slots = ["Morning In", "Morning Out", "Afternoon In", "Afternoon Out"]
+            for idx, log in enumerate(day_logs):
+                new_label = slots[idx] if idx < 4 else "Unclassified"
+                new_type = "IN" if idx % 2 == 0 else "OUT"
+                if log.punch_label != new_label or log.punch_type != new_type:
+                    log.punch_label = new_label
+                    log.punch_type = new_type
+                    updated = True
+                    
+    if updated:
+        await db.commit()
+

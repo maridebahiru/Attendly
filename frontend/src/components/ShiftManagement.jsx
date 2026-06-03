@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
-import { Settings, Plus, UserCheck, Briefcase, Clock, AlertCircle, Save, CheckCircle2, ChevronRight, Hash } from 'lucide-react';
+import client from '../api/client';
+import { Settings, Plus, UserCheck, Briefcase, Clock, AlertCircle, Save, CheckCircle2, ChevronRight, Hash, Calendar } from 'lucide-react';
 
 const ShiftManagement = () => {
   const [shifts, setShifts] = useState([]);
@@ -12,19 +12,22 @@ const ShiftManagement = () => {
 
   const [newShift, setNewShift] = useState({
     name: '',
-    start_time_1: '07:30',
-    end_time_1: '12:00',
-    start_time_2: '14:00',
-    end_time_2: '17:30',
+    start_time_1: '08:00',
+    end_time_1: '17:00',
+    start_time_2: '',
+    end_time_2: '',
     total_hours_required: 8.0
   });
+
+  const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  const [selectedDays, setSelectedDays] = useState(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']);
 
   const fetchData = async () => {
     setLoading(true);
     try {
       const [shiftsRes, usersRes] = await Promise.all([
-        axios.get('http://localhost:8000/shifts'),
-        axios.get('http://localhost:8000/users')
+        client.get('/shifts'),
+        client.get('/users')
       ]);
       setShifts(shiftsRes.data);
       setUsers(usersRes.data);
@@ -43,28 +46,53 @@ const ShiftManagement = () => {
   const handleAddShift = async (e) => {
     e.preventDefault();
     try {
-      await axios.post('http://localhost:8000/shifts', newShift);
+      const shiftData = {
+        ...newShift,
+        assigned_days: selectedDays.join(','),
+        // If start_time_2 is empty, send None so it becomes a 2-punch shift
+        start_time_2: newShift.start_time_2 || null,
+        end_time_2: newShift.end_time_2 || null
+      };
+      
+      await client.post('/shifts', shiftData);
       setShowAddModal(false);
+      setNewShift({
+        name: '',
+        start_time_1: '08:00',
+        end_time_1: '17:00',
+        start_time_2: '',
+        end_time_2: '',
+        total_hours_required: 8.0
+      });
+      setSelectedDays(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']);
       fetchData();
       showSuccess('Shift created successfully!');
     } catch (err) {
-      setError('Failed to create shift.');
+      setError('Failed to create shift. Ensure you have Super Admin privileges.');
     }
   };
 
   const assignShift = async (userId, shiftId) => {
     try {
-      await axios.post(`http://localhost:8000/users/${userId}/shift?shift_id=${shiftId}`);
+      await client.post(`/users/${userId}/shift?shift_id=${shiftId}`);
       fetchData();
       showSuccess('User shift updated!');
     } catch (err) {
-      setError('Assignment failed.');
+      setError('Assignment failed. Ensure you have Super Admin privileges.');
     }
   };
 
   const showSuccess = (msg) => {
     setSuccessMsg(msg);
     setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
+  const toggleDay = (day) => {
+    if (selectedDays.includes(day)) {
+      setSelectedDays(selectedDays.filter(d => d !== day));
+    } else {
+      setSelectedDays([...selectedDays, day]);
+    }
   };
 
   return (
@@ -77,7 +105,10 @@ const ShiftManagement = () => {
               <div className="p-2.5 bg-indigo-600 rounded-xl text-white shadow-lg shadow-indigo-200">
                 <Briefcase size={22} />
               </div>
-              <h2 className="text-xl font-bold text-gray-800">Available Shifts</h2>
+              <div>
+                <h2 className="text-xl font-bold text-gray-800">Working Shifts</h2>
+                <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">Manage working protocols</p>
+              </div>
             </div>
             <button 
               onClick={() => setShowAddModal(true)}
@@ -89,42 +120,65 @@ const ShiftManagement = () => {
           </div>
 
           <div className="p-4 space-y-4 max-h-[500px] overflow-auto">
-            {shifts.map(shift => (
-              <div key={shift.id} className="p-5 border border-gray-100 rounded-2xl bg-gray-50/50 hover:bg-white hover:border-indigo-200 transition-all duration-300 group hover:shadow-xl">
-                <div className="flex items-center justify-between mb-4">
-                   <h3 className="font-black text-gray-900 group-hover:text-indigo-700 transition-colors flex items-center gap-2">
-                     <span className="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
-                     {shift.name}
-                   </h3>
-                   <span className="text-[10px] uppercase font-black tracking-widest bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-full shadow-sm">
-                     {shift.total_hours_required}<span className="ml-0.5">hrs Required</span>
-                   </span>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm group-hover:border-indigo-100 transition duration-300">
-                    <div className="text-[9px] text-gray-400 font-black uppercase tracking-tighter mb-1.5 flex items-center gap-1.5 line-clamp-1 overflow-hidden">
-                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-300"></div> Morning Session
-                    </div>
-                    <p className="text-xs font-black text-gray-700 flex items-center gap-1.5">
-                      <Clock size={12} className="text-indigo-400 group-hover:animate-pulse" /> 
-                      {shift.start_time_1} - {shift.end_time_1}
-                    </p>
+            {loading ? (
+              <div className="text-center py-10 text-gray-400 font-bold">Loading shifts...</div>
+            ) : shifts.length === 0 ? (
+              <div className="text-center py-10 text-gray-400 font-bold">No shifts created yet.</div>
+            ) : (
+              shifts.map(shift => (
+                <div key={shift.id} className="p-5 border border-gray-100 rounded-2xl bg-gray-50/50 hover:bg-white hover:border-indigo-200 transition-all duration-300 group hover:shadow-xl">
+                  <div className="flex items-center justify-between mb-3">
+                     <h3 className="font-black text-gray-900 group-hover:text-indigo-700 transition-colors flex items-center gap-2">
+                       <span className="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
+                       {shift.name}
+                     </h3>
+                     <span className="text-[10px] uppercase font-black tracking-widest bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-full shadow-sm">
+                       {shift.total_hours_required}<span className="ml-0.5">hrs Target</span>
+                     </span>
                   </div>
-                  {shift.start_time_2 && (
-                    <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm group-hover:border-indigo-100 transition duration-300">
-                      <div className="text-[9px] text-gray-400 font-black uppercase tracking-tighter mb-1.5 flex items-center gap-1.5 line-clamp-1 overflow-hidden">
-                        <div className="w-1.5 h-1.5 rounded-full bg-orange-300"></div> afternoon session
+                  
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm group-hover:border-indigo-100 transition duration-300">
+                        <div className="text-[9px] text-gray-400 font-black uppercase tracking-tighter mb-1.5 flex items-center gap-1.5 line-clamp-1 overflow-hidden">
+                          <div className="w-1.5 h-1.5 rounded-full bg-indigo-300"></div> Shift Hours
+                        </div>
+                        <p className="text-xs font-black text-gray-700 flex items-center gap-1.5">
+                          <Clock size={12} className="text-indigo-400 group-hover:animate-pulse" /> 
+                          {shift.start_time_1} - {shift.end_time_1}
+                        </p>
                       </div>
-                      <p className="text-xs font-black text-gray-700 flex items-center gap-1.5">
-                        <Clock size={12} className="text-orange-400 group-hover:animate-pulse" />
-                        {shift.start_time_2} - {shift.end_time_2}
-                      </p>
+                      {shift.start_time_2 && (
+                        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm group-hover:border-indigo-100 transition duration-300">
+                          <div className="text-[9px] text-gray-400 font-black uppercase tracking-tighter mb-1.5 flex items-center gap-1.5 line-clamp-1 overflow-hidden">
+                            <div className="w-1.5 h-1.5 rounded-full bg-orange-300"></div> Afternoon Breakout
+                          </div>
+                          <p className="text-xs font-black text-gray-700 flex items-center gap-1.5">
+                            <Clock size={12} className="text-orange-400 group-hover:animate-pulse" />
+                            {shift.start_time_2} - {shift.end_time_2}
+                          </p>
+                        </div>
+                      )}
                     </div>
-                  )}
+
+                    {shift.assigned_days && (
+                      <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm group-hover:border-indigo-100 transition duration-300">
+                        <div className="text-[9px] text-gray-400 font-black uppercase tracking-tighter mb-1 flex items-center gap-1.5">
+                          <Calendar size={10} className="text-indigo-400" /> Active Days
+                        </div>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {shift.assigned_days.split(',').map((day, idx) => (
+                            <span key={`${day}-${idx}`} className="text-[8px] font-black uppercase px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded border border-indigo-100">
+                              {day.slice(0, 3)}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -146,6 +200,12 @@ const ShiftManagement = () => {
               <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-5 py-2.5 rounded-xl border border-emerald-100 animate-in fade-in slide-in-from-top-4 duration-300 shadow-sm">
                 <CheckCircle2 size={16} className="stroke-[3px]" />
                 <span className="text-sm font-black tracking-tighter">{successMsg}</span>
+              </div>
+            )}
+            {error && (
+              <div className="flex items-center gap-2 text-rose-600 bg-rose-50 px-5 py-2.5 rounded-xl border border-rose-100 animate-in fade-in shadow-sm text-xs font-bold">
+                <AlertCircle size={16} />
+                <span>{error}</span>
               </div>
             )}
           </div>
@@ -179,7 +239,7 @@ const ShiftManagement = () => {
                       onChange={(e) => assignShift(user.user_id, e.target.value)}
                       className="bg-gray-50 border border-gray-200 rounded-xl px-5 py-2.5 text-sm font-black text-gray-700 focus:ring-4 focus:ring-blue-100 focus:bg-white focus:border-blue-400 outline-none transition-all duration-300 cursor-pointer appearance-none min-w-[200px] shadow-sm hover:border-blue-200"
                     >
-                      <option value="" disabled className="font-bold text-gray-400">--- Select Shift ---</option>
+                      <option value="" className="font-bold text-gray-400">--- Default Hours ---</option>
                       {shifts.map(s => (
                         <option key={s.id} value={s.id} className="font-bold text-gray-700 py-2">{s.name}</option>
                       ))}
@@ -199,8 +259,8 @@ const ShiftManagement = () => {
       {showAddModal && (
         <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in duration-300">
           <div className="bg-white rounded-[2.5rem] shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] w-full max-w-lg border border-white/20 animate-in slide-in-from-bottom-8 duration-500 overflow-hidden">
-            <div className="p-10 pb-6">
-                <div className="flex items-center gap-5 mb-10">
+            <div className="p-10 pb-6 max-h-[90vh] overflow-y-auto">
+                <div className="flex items-center gap-5 mb-8">
                     <div className="p-4 bg-indigo-600 rounded-[1.25rem] text-white shadow-2xl shadow-indigo-200 rotate-6">
                         <Settings size={32} strokeWidth={2.5} />
                     </div>
@@ -210,57 +270,65 @@ const ShiftManagement = () => {
                     </div>
                 </div>
 
-                <form onSubmit={handleAddShift} className="space-y-8">
+                <form onSubmit={handleAddShift} className="space-y-6">
+                  {/* Shift Reference Name */}
                   <div className="relative group">
                     <label className="absolute -top-3 left-6 bg-white px-2.5 text-[10px] font-black text-indigo-600 uppercase tracking-widest z-10 transition-all duration-300 group-focus-within:scale-110">Shift Reference Name</label>
                     <input 
                       required
-                      placeholder="e.g. Regular Day Shift"
-                      className="w-full bg-gray-50/50 border-2 border-gray-100 rounded-[1.25rem] px-8 py-5 font-black text-gray-700 focus:ring-8 focus:ring-indigo-50 focus:bg-white focus:border-indigo-600 outline-none transition-all placeholder:text-gray-300 placeholder:font-bold shadow-inner"
+                      placeholder="e.g. Morning Shift"
+                      className="w-full bg-gray-50/50 border-2 border-gray-100 rounded-[1.25rem] px-8 py-4 font-black text-gray-700 focus:ring-8 focus:ring-indigo-50 focus:bg-white focus:border-indigo-600 outline-none transition-all placeholder:text-gray-300 placeholder:font-bold shadow-inner"
                       value={newShift.name}
                       onChange={e => setNewShift({...newShift, name: e.target.value})}
                     />
                   </div>
 
-                  <div className="bg-indigo-50/30 p-8 rounded-[2rem] border border-indigo-100/50 space-y-10 group/sessions shadow-inner relative">
+                  {/* Sessions details */}
+                  <div className="bg-indigo-50/30 p-6 rounded-[2rem] border border-indigo-100/50 space-y-6 group/sessions shadow-inner relative">
                     <div className="absolute right-6 top-6 opacity-10 group-hover/sessions:scale-110 transition duration-700">
                         <Clock size={40} className="text-indigo-900" />
                     </div>
 
-                    <div className="space-y-4">
+                    <div className="space-y-3">
                         <div className="text-[11px] font-black text-indigo-400 uppercase tracking-widest flex items-center gap-2">
-                           <div className="w-2 h-2 rounded-full bg-indigo-500"></div> Morning Session (REQUIRED)
+                           <div className="w-2 h-2 rounded-full bg-indigo-500"></div> Shift Hours (REQUIRED)
                         </div>
-                        <div className="grid grid-cols-2 gap-6 relative">
-                            <input 
-                                type="time" required
-                                className="bg-white border-2 border-indigo-100 rounded-2xl px-6 py-4 font-black text-gray-700 focus:border-indigo-600 outline-none shadow-sm transition-all text-center text-lg"
-                                value={newShift.start_time_1}
-                                onChange={e => setNewShift({...newShift, start_time_1: e.target.value})}
-                            />
-                            <input 
-                                type="time" required
-                                className="bg-white border-2 border-indigo-100 rounded-2xl px-6 py-4 font-black text-gray-700 focus:border-indigo-600 outline-none shadow-sm transition-all text-center text-lg"
-                                value={newShift.end_time_1}
-                                onChange={e => setNewShift({...newShift, end_time_1: e.target.value})}
-                            />
+                        <div className="grid grid-cols-2 gap-4 relative">
+                            <div className="relative">
+                              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[9px] font-black text-gray-400">IN</span>
+                              <input 
+                                  type="time" required
+                                  className="w-full bg-white border-2 border-indigo-100 rounded-2xl pl-10 pr-4 py-3 font-black text-gray-700 focus:border-indigo-600 outline-none shadow-sm transition-all text-center text-base"
+                                  value={newShift.start_time_1}
+                                  onChange={e => setNewShift({...newShift, start_time_1: e.target.value})}
+                              />
+                            </div>
+                            <div className="relative">
+                              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[9px] font-black text-gray-400">OUT</span>
+                              <input 
+                                  type="time" required
+                                  className="w-full bg-white border-2 border-indigo-100 rounded-2xl pl-10 pr-4 py-3 font-black text-gray-700 focus:border-indigo-600 outline-none shadow-sm transition-all text-center text-base"
+                                  value={newShift.end_time_1}
+                                  onChange={e => setNewShift({...newShift, end_time_1: e.target.value})}
+                              />
+                            </div>
                         </div>
                     </div>
 
-                    <div className="space-y-4">
+                    <div className="space-y-3">
                         <div className="text-[11px] font-black text-orange-400 uppercase tracking-widest flex items-center gap-2">
-                           <div className="w-2 h-2 rounded-full bg-orange-400"></div> Afternoon Session (OPTIONAL)
+                           <div className="w-2 h-2 rounded-full bg-orange-400"></div> Afternoon Breakout (OPTIONAL)
                         </div>
-                        <div className="grid grid-cols-2 gap-6">
+                        <div className="grid grid-cols-2 gap-4">
                             <input 
                                 type="time"
-                                className="bg-white border-2 border-orange-100 rounded-2xl px-6 py-4 font-black text-gray-700 focus:border-orange-600 outline-none shadow-sm transition-all text-center text-lg placeholder-gray-200"
+                                className="bg-white border-2 border-orange-100 rounded-2xl px-4 py-3 font-black text-gray-700 focus:border-orange-600 outline-none shadow-sm transition-all text-center text-base placeholder-gray-200"
                                 value={newShift.start_time_2}
                                 onChange={e => setNewShift({...newShift, start_time_2: e.target.value})}
                             />
                             <input 
                                 type="time"
-                                className="bg-white border-2 border-orange-100 rounded-2xl px-6 py-4 font-black text-gray-700 focus:border-orange-600 outline-none shadow-sm transition-all text-center text-lg placeholder-gray-200"
+                                className="bg-white border-2 border-orange-100 rounded-2xl px-4 py-3 font-black text-gray-700 focus:border-orange-600 outline-none shadow-sm transition-all text-center text-base placeholder-gray-200"
                                 value={newShift.end_time_2}
                                 onChange={e => setNewShift({...newShift, end_time_2: e.target.value})}
                             />
@@ -271,24 +339,50 @@ const ShiftManagement = () => {
                         <label className="absolute -top-3 left-6 bg-white px-2.5 text-[10px] font-black text-emerald-600 uppercase tracking-widest z-10">DAILY Hour Target</label>
                         <input 
                             type="number" step="0.5" required
-                            className="w-full bg-white border-2 border-emerald-100 rounded-2xl px-8 py-4 font-black text-gray-800 focus:border-emerald-600 outline-none shadow-sm transition-all text-xl"
+                            className="w-full bg-white border-2 border-emerald-100 rounded-2xl px-8 py-3 font-black text-gray-800 focus:border-emerald-600 outline-none shadow-sm transition-all text-base"
                             value={newShift.total_hours_required}
                             onChange={e => setNewShift({...newShift, total_hours_required: parseFloat(e.target.value)})}
                         />
                     </div>
                   </div>
 
-                  <div className="flex gap-4 pt-4">
+                  {/* Assigned Days selection */}
+                  <div className="p-6 bg-gray-50 rounded-[2rem] border border-gray-200 space-y-3">
+                    <div className="text-[11px] font-black text-indigo-600 uppercase tracking-widest flex items-center gap-2">
+                       <Calendar size={12} /> Assigned Days (REQUIRED)
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      {daysOfWeek.map(day => {
+                        const active = selectedDays.includes(day);
+                        return (
+                          <button
+                            key={day}
+                            type="button"
+                            onClick={() => toggleDay(day)}
+                            className={`px-3 py-2 rounded-xl text-xs font-black transition-all duration-200 ${
+                              active 
+                                ? 'bg-indigo-600 text-white shadow-md border-2 border-indigo-600' 
+                                : 'bg-white text-gray-600 border-2 border-gray-200 hover:border-indigo-300'
+                            }`}
+                          >
+                            {day}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 pt-2">
                     <button 
                       type="button" 
                       onClick={() => setShowAddModal(false)}
-                      className="flex-1 py-5 rounded-[1.5rem] font-black text-gray-400 border-2 border-gray-100 hover:bg-gray-50 transition active:scale-95 duration-200 tracking-tighter"
+                      className="flex-1 py-4 rounded-[1.5rem] font-black text-gray-400 border-2 border-gray-100 hover:bg-gray-50 transition active:scale-95 duration-200 tracking-tighter"
                     >
                       ABORT
                     </button>
                     <button 
                       type="submit" 
-                      className="flex-3 bg-indigo-600 text-white rounded-[1.5rem] font-black hover:bg-indigo-700 transition shadow-2xl shadow-indigo-200 px-12 py-5 flex items-center justify-center gap-3 active:scale-95 duration-200 tracking-tighter"
+                      className="flex-3 bg-indigo-600 text-white rounded-[1.5rem] font-black hover:bg-indigo-700 transition shadow-2xl shadow-indigo-200 px-8 py-4 flex items-center justify-center gap-3 active:scale-95 duration-200 tracking-tighter"
                     >
                       <Save size={20} className="stroke-[2.5px]" />
                       DEPLOY SHIFT

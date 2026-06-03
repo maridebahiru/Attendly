@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import client from '../api/client';
 import { Filter, ChevronLeft, ChevronRight, Edit2, Save, X } from 'lucide-react';
 
-export default function AttendanceTable({ newEventsCount }) {
+export default function AttendanceTable({ newEventsCount, onRefresh }) {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
@@ -68,7 +68,8 @@ export default function AttendanceTable({ newEventsCount }) {
         edited_by: userName
       });
       setEditingId(null);
-      fetchLogs(); // Refresh list
+      fetchLogs(); // Refresh local list
+      if (onRefresh) onRefresh(); // Trigger global refresh
     } catch (error) {
       alert("Failed to update log: " + (error.response?.data?.detail || error.message));
     }
@@ -111,6 +112,7 @@ export default function AttendanceTable({ newEventsCount }) {
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time (Device)</th>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Punch Type</th>
+              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Session</th>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sync Status</th>
               {userRole === 'super_admin' && (
                 <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
@@ -120,11 +122,11 @@ export default function AttendanceTable({ newEventsCount }) {
           <tbody className="bg-white divide-y divide-gray-200">
             {loading && logs.length === 0 ? (
               <tr>
-                <td colSpan="5" className="px-6 py-10 text-center text-gray-500">Loading records...</td>
+                <td colSpan="6" className="px-6 py-10 text-center text-gray-500">Loading records...</td>
               </tr>
             ) : logs.length === 0 ? (
               <tr>
-                <td colSpan="5" className="px-6 py-10 text-center text-gray-500">No attendance records found.</td>
+                <td colSpan="6" className="px-6 py-10 text-center text-gray-500">No attendance records found.</td>
               </tr>
             ) : (
               logs.map((log) => (
@@ -140,7 +142,7 @@ export default function AttendanceTable({ newEventsCount }) {
                   <td className="px-6 py-4 whitespace-nowrap">
                     {editingId && editingId === log.id ? (
                       <input 
-                        type="datetime-local" 
+                         type="datetime-local" 
                         step="1"
                         value={editTime}
                         onChange={(e) => setEditTime(e.target.value)}
@@ -148,8 +150,13 @@ export default function AttendanceTable({ newEventsCount }) {
                       />
                     ) : (
                       <>
-                        <div className="text-sm text-gray-900">{new Date(log.timestamp).toLocaleDateString()}</div>
-                        <div className="text-sm text-gray-500">{new Date(log.timestamp).toLocaleTimeString()}</div>
+                        <div className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                          <span className="text-[10px] bg-blue-50 text-blue-700 px-1 py-0.5 rounded font-black tracking-wider uppercase">ETH</span>
+                          {log.eth_date || new Date(log.timestamp).toLocaleDateString()}
+                        </div>
+                        <div className="text-sm text-gray-500 font-medium pl-9">
+                          {log.eth_time || new Date(log.timestamp).toLocaleTimeString()}
+                        </div>
                       </>
                     )}
                   </td>
@@ -170,6 +177,17 @@ export default function AttendanceTable({ newEventsCount }) {
                         {log.punch_type}
                       </span>
                     )}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className={`px-2 inline-flex text-xs leading-5 font-bold rounded-full ${
+                      log.punch_label === 'Morning In' ? 'bg-blue-100 text-blue-800' :
+                      log.punch_label === 'Morning Out' ? 'bg-orange-100 text-orange-800' :
+                      log.punch_label === 'Afternoon In' ? 'bg-indigo-100 text-indigo-800' :
+                      log.punch_label === 'Afternoon Out' ? 'bg-amber-100 text-amber-800' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>
+                      {log.punch_label || 'Unclassified'}
+                    </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
