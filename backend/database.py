@@ -19,8 +19,30 @@ elif DATABASE_URL.startswith("postgresql://"):
 elif DATABASE_URL.startswith("sqlite://"):
     DATABASE_URL = DATABASE_URL.replace("sqlite://", "sqlite+aiosqlite://", 1)
 
+def mask_url(url: str) -> str:
+    try:
+        if "@" in url:
+            prefix, suffix = url.split("@", 1)
+            scheme_user_pass = prefix.split("://", 1)
+            if len(scheme_user_pass) == 2:
+                scheme, user_pass = scheme_user_pass
+                if ":" in user_pass:
+                    user, _ = user_pass.split(":", 1)
+                    return f"{scheme}://{user}:****@{suffix}"
+            return f"****@{suffix}"
+    except Exception:
+        pass
+    return url
+
 # Create async SQLAlchemy engine
-engine = create_async_engine(DATABASE_URL, echo=False)
+try:
+    print(f"Connecting to database URL: {mask_url(DATABASE_URL)}")
+    engine = create_async_engine(DATABASE_URL, echo=False)
+except Exception as e:
+    print(f"DATABASE ERROR: Failed to create engine for URL. Error: {e}")
+    print("Falling back to local SQLite database: sqlite+aiosqlite:///./attendance.db")
+    DATABASE_URL = "sqlite+aiosqlite:///./attendance.db"
+    engine = create_async_engine(DATABASE_URL, echo=False)
 
 # Create session maker
 async_session = async_sessionmaker(
