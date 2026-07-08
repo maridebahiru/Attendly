@@ -20,7 +20,8 @@ import {
   Lock,
   Unlock,
   Save,
-  SlidersHorizontal
+  SlidersHorizontal,
+  UserX
 } from 'lucide-react';
 
 const modules = [
@@ -31,7 +32,8 @@ const modules = [
   { id: 'logs', name: 'Attendance Logs', icon: Clock, description: 'View and edit raw punch records' },
   { id: 'admins', name: 'Admin Management', icon: ShieldAlert, description: 'Create and remove system administrator accounts' },
   { id: 'settings', name: 'Profile Settings', icon: Settings, description: 'Configure admin account credentials' },
-  { id: 'system', name: 'System Management', icon: SlidersHorizontal, description: 'Configure global working hours, off days, and device connection' }
+  { id: 'system', name: 'System Management', icon: SlidersHorizontal, description: 'Configure global working hours, off days, and device connection' },
+  { id: 'absences', name: 'Absence Management', icon: UserX, description: 'Manage employee absences, leaves and off-days' }
 ];
 
 const PrivilegeManagement = () => {

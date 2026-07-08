@@ -65,6 +65,7 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://192.168.10.241:5173",
+        "http://192.168.10.97:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -424,13 +425,16 @@ async def get_attendance_report_endpoint(
     month: Optional[int] = Query(None, description="Month (1-13) for monthly view"),
     year: Optional[int] = Query(None, description="Year for monthly view"),
     target_date: Optional[date] = Query(None, description="Gregorian target date"),
+    start_date: Optional[date] = Query(None, description="Start date for range"),
+    end_date: Optional[date] = Query(None, description="End date for range"),
+    user_id_filter: Optional[str] = Query(None, description="Filter by exact user id"),
     current_user = Depends(auth.get_current_user)
 ):
     """GET /reports/attendance — returns a full report (daily or monthly)"""
     async with async_session() as db:
         # If the current user is a normal 'user', they can ONLY see their own data
         effective_name_filter = name
-        user_id_restrict = None
+        user_id_restrict = user_id_filter
         
         # We need to distinguish between Admin model and User model results from get_current_user
         # Based on my change in auth.py, it returns either.
@@ -442,7 +446,7 @@ async def get_attendance_report_endpoint(
             # It's a normal user, restrict by their user_id
             user_id_restrict = current_user.user_id
             
-        report = await crud.get_attendance_report(db, eth_year=eth_year, eth_month=eth_month, eth_day=eth_day, name_filter=effective_name_filter, month=month, year=year, target_date=target_date)
+        report = await crud.get_attendance_report(db, eth_year=eth_year, eth_month=eth_month, eth_day=eth_day, name_filter=effective_name_filter, month=month, year=year, target_date=target_date, start_date=start_date, end_date=end_date, user_id_filter=user_id_restrict)
 
         
         if not is_admin:

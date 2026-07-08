@@ -4,6 +4,9 @@ from sqlalchemy import desc
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from datetime import datetime, date, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 import schemas
 from ethiopian_date import gregorian_to_ethiopian, ethiopian_to_gregorian
@@ -79,8 +82,12 @@ async def save_punch(db: AsyncSession, event: schemas.PunchEvent, device_ip: str
     last_log = result.scalars().first()
 
     # Determine toggle status
-    if last_log and last_log.punch_type == "IN":
-        punch_type_str = "OUT"
+    if last_log:
+        time_diff = (corrected_timestamp - last_log.timestamp).total_seconds()
+        if time_diff < 300: # 5 minutes threshold
+            logger.info(f"Ignoring duplicate punch for user {event.user_id} at {corrected_timestamp} (within 5 minutes)")
+            return None
+        punch_type_str = "OUT" if last_log.punch_type == "IN" else "IN"
     else:
         punch_type_str = "IN"
 
@@ -238,7 +245,10 @@ async def get_attendance_report(
     name_filter: Optional[str] = None,
     month: Optional[int] = None,
     year: Optional[int] = None,
-    target_date: Optional[date] = None
+    target_date: Optional[date] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    user_id_filter: Optional[str] = None
 ) -> List[dict]:
     """Generate an enhanced report with worked hours, late minutes, early departures, and missing punches.
     Updated to support custom shifts (2-punch single sessions, assigned days) and approved absences."""
@@ -254,6 +264,8 @@ async def get_attendance_report(
     users_query = select(User)
     if name_filter:
         users_query = users_query.filter(User.name.ilike(f"%{name_filter}%"))
+    if user_id_filter:
+        users_query = users_query.filter(User.user_id == user_id_filter)
     
     users_result = await db.execute(users_query)
     users = users_result.scalars().all()
@@ -263,7 +275,10 @@ async def get_attendance_report(
     shifts = {s.id: s for s in shifts_result.scalars().all()}
     
     # 4. Define date range
-    if eth_year and eth_month:
+    if start_date and end_date:
+        start_date_g = start_date
+        end_date_g = end_date
+    elif eth_year and eth_month:
         if eth_day:
             # Daily report for specific Ethiopian date
             target_date = ethiopian_to_gregorian(eth_year, eth_month, eth_day)
@@ -385,30 +400,37 @@ async def get_attendance_report(
                 
             day_logs = sorted(user_logs.get(d, []), key=lambda x: x.timestamp)
             
-            p_map = {"Morning In": None, "Morning Out": None, "Afternoon In": None, "Afternoon Out": None}
+            # Filter out duplicate close scans (within 5 minutes)
+            valid_logs = []
             unclassified_logs = []
+            for log in day_logs:
+                if not valid_logs:
+                    valid_logs.append(log)
+                else:
+                    time_diff = (log.timestamp - valid_logs[-1].timestamp).total_seconds()
+                    if time_diff >= 300:
+                        valid_logs.append(log)
+            
+            p_map = {"Morning In": None, "Morning Out": None, "Afternoon In": None, "Afternoon Out": None}
             
             if is_two_punch:
                 # 2-punch single session shift
-                if len(day_logs) > 0:
-                    p_map["Morning In"] = day_logs[0]
-                if len(day_logs) > 1:
-                    p_map["Morning Out"] = day_logs[-1]
-                if len(day_logs) > 2:
-                    unclassified_logs = day_logs[1:-1]
+                if len(valid_logs) > 0:
+                    p_map["Morning In"] = valid_logs[0]
+                if len(valid_logs) > 1:
+                    p_map["Morning Out"] = valid_logs[-1]
+                if len(valid_logs) > 2:
+                    unclassified_logs.extend(valid_logs[1:-1])
             else:
                 # Default 4-punch system settings or 2-session shift
-                # The first scan of the day must always be Morning In
-                # Second scan -> Morning Out
-                # Third scan -> Afternoon In
-                # Fourth scan -> Afternoon Out
-                # Do not skip or misassign any session slot
                 slots = ["Morning In", "Morning Out", "Afternoon In", "Afternoon Out"]
-                for idx, log in enumerate(day_logs):
+                for idx, log in enumerate(valid_logs):
                     if idx < 4:
                         p_map[slots[idx]] = log
                     else:
                         unclassified_logs.append(log)
+            
+            unclassified_logs = sorted(unclassified_logs, key=lambda x: x.timestamp)
 
             # Calculate Statuses based on these classified punches
             if is_two_punch:
@@ -484,6 +506,7 @@ async def get_attendance_report(
 
             user_daily_records.append({
                 "date": eth_date_str,
+                "gregorian_date": d.isoformat(),
                 "employee_name": user.name,
                 "employee_id": user.user_id,
                 "morning_in": format_eth_time(p_map["Morning In"].timestamp) if p_map["Morning In"] else "Not Scanned",
@@ -655,19 +678,31 @@ async def reclassify_all_punches(db: AsyncSession):
         # Sort logs chronologically
         day_logs.sort(key=lambda x: x.timestamp)
         
+        valid_logs = []
+        duplicate_logs = []
+        for log in day_logs:
+            if not valid_logs:
+                valid_logs.append(log)
+            else:
+                time_diff = (log.timestamp - valid_logs[-1].timestamp).total_seconds()
+                if time_diff >= 300: # 5 minutes
+                    valid_logs.append(log)
+                else:
+                    duplicate_logs.append(log)
+        
         if is_two_punch:
             # 2-punch shift: 1st is Morning In, last is Morning Out, others Unclassified
-            if len(day_logs) > 0:
-                if day_logs[0].punch_label != "Morning In" or day_logs[0].punch_type != "IN":
-                    day_logs[0].punch_label = "Morning In"
-                    day_logs[0].punch_type = "IN"
+            if len(valid_logs) > 0:
+                if valid_logs[0].punch_label != "Morning In" or valid_logs[0].punch_type != "IN":
+                    valid_logs[0].punch_label = "Morning In"
+                    valid_logs[0].punch_type = "IN"
                     updated = True
-            if len(day_logs) > 1:
-                if day_logs[-1].punch_label != "Morning Out" or day_logs[-1].punch_type != "OUT":
-                    day_logs[-1].punch_label = "Morning Out"
-                    day_logs[-1].punch_type = "OUT"
+            if len(valid_logs) > 1:
+                if valid_logs[-1].punch_label != "Morning Out" or valid_logs[-1].punch_type != "OUT":
+                    valid_logs[-1].punch_label = "Morning Out"
+                    valid_logs[-1].punch_type = "OUT"
                     updated = True
-            for log in day_logs[1:-1]:
+            for log in valid_logs[1:-1]:
                 if log.punch_label != "Unclassified" or log.punch_type != "IN":
                     log.punch_label = "Unclassified"
                     log.punch_type = "IN"
@@ -675,13 +710,20 @@ async def reclassify_all_punches(db: AsyncSession):
         else:
             # Default 4-punch chronological
             slots = ["Morning In", "Morning Out", "Afternoon In", "Afternoon Out"]
-            for idx, log in enumerate(day_logs):
+            for idx, log in enumerate(valid_logs):
                 new_label = slots[idx] if idx < 4 else "Unclassified"
                 new_type = "IN" if idx % 2 == 0 else "OUT"
                 if log.punch_label != new_label or log.punch_type != new_type:
                     log.punch_label = new_label
                     log.punch_type = new_type
                     updated = True
+                    
+        # Mark all duplicate logs as Unclassified so they don't get mislabeled
+        for log in duplicate_logs:
+            if log.punch_label != "Unclassified" or log.punch_type != "IN":
+                log.punch_label = "Unclassified"
+                log.punch_type = "IN"
+                updated = True
                     
     if updated:
         await db.commit()

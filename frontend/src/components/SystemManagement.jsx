@@ -140,91 +140,39 @@ const SystemManagement = () => {
           </div>
           <div>
             <h2 className="text-2xl font-black text-slate-800 tracking-tight">System Management</h2>
-            <p className="text-sm text-slate-500">Configure global working hours, off days, and biometric device parameters.</p>
+            <p className="text-sm text-slate-500">Configure off days, scan time ranges, and biometric device parameters.</p>
           </div>
         </div>
 
         <form onSubmit={handleUpdate} className="space-y-8">
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {/* Time Settings */}
-            <div className="space-y-6 bg-slate-50 p-6 rounded-2xl border border-slate-100">
-              <h3 className="font-bold flex items-center gap-2 text-slate-700">
-                <Clock size={18} className="text-blue-500" />
-                Working Hours
-              </h3>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Morning In</label>
-                  <input 
-                    type="time" required
-                    value={settings.morning_in}
-                    onChange={(e) => setSettings({ ...settings, morning_in: e.target.value })}
-                    className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all font-bold text-slate-700 shadow-sm"
-                  />
-                </div>
-                
-                <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Morning Out</label>
-                  <input 
-                    type="time" required
-                    value={settings.morning_out}
-                    onChange={(e) => setSettings({ ...settings, morning_out: e.target.value })}
-                    className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all font-bold text-slate-700 shadow-sm"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Afternoon In</label>
-                  <input 
-                    type="time" required
-                    value={settings.afternoon_in}
-                    onChange={(e) => setSettings({ ...settings, afternoon_in: e.target.value })}
-                    className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all font-bold text-slate-700 shadow-sm"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Afternoon Out</label>
-                  <input 
-                    type="time" required
-                    value={settings.afternoon_out}
-                    onChange={(e) => setSettings({ ...settings, afternoon_out: e.target.value })}
-                    className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all font-bold text-slate-700 shadow-sm"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Off Days Selection */}
-            <div className="space-y-6 bg-slate-50 p-6 rounded-2xl border border-slate-100">
-              <h3 className="font-bold flex items-center gap-2 text-slate-700">
-                <CalendarDays size={18} className="text-emerald-500" />
-                Off Days
-              </h3>
-              <div className="space-y-2">
-                 <p className="text-xs text-slate-500 mb-4">Select days that are not counted as working days for attendance calculation (Ethiopian Calendar mapping applies to weekdays).</p>
-                 <div className="flex flex-wrap gap-2">
-                   {daysOfWeek.map(day => {
-                     const isSelected = settings.off_days?.includes(day);
-                     return (
-                       <button
-                         key={day}
-                         type="button"
-                         onClick={() => handleDayToggle(day)}
-                         className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                           isSelected 
-                           ? 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200 shadow-sm' 
-                           : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'
-                         }`}
-                       >
-                         {day}
-                       </button>
-                     )
-                   })}
-                 </div>
-              </div>
+          {/* Off Days Selection */}
+          <div className="space-y-6 bg-slate-50 p-6 rounded-2xl border border-slate-100">
+            <h3 className="font-bold flex items-center gap-2 text-slate-700">
+              <CalendarDays size={18} className="text-emerald-500" />
+              Off Days
+            </h3>
+            <div className="space-y-2">
+               <p className="text-xs text-slate-500 mb-4">Select days that are not counted as working days for attendance calculation (Ethiopian Calendar mapping applies to weekdays).</p>
+               <div className="flex flex-wrap gap-2">
+                 {daysOfWeek.map(day => {
+                   const isSelected = settings.off_days?.includes(day);
+                   return (
+                     <button
+                       key={day}
+                       type="button"
+                       onClick={() => handleDayToggle(day)}
+                       className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                         isSelected 
+                         ? 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200 shadow-sm' 
+                         : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-100'
+                       }`}
+                     >
+                       {day}
+                     </button>
+                   )
+                 })}
+               </div>
             </div>
           </div>
 

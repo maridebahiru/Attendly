@@ -3,7 +3,7 @@ import client from '../api/client';
 import { 
   Calendar, Clock, User, Download, RefreshCw, AlertCircle, FileText, 
   BarChart3, PieChart as PieChartIcon, TrendingUp, Filter, Search,
-  ChevronRight, AlertTriangle, CheckCircle2, History, XCircle, FileSpreadsheet
+  ChevronRight, AlertTriangle, CheckCircle2, History, XCircle, FileSpreadsheet, X
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 
 const DeviceHistoryList = () => {
   const [history, setHistory] = useState([]);
@@ -71,6 +71,13 @@ const ReportsDashboard = ({ refreshTrigger }) => {
   const [selectedYear, setSelectedYear] = useState(null);
   const [nameFilter, setNameFilter] = useState('');
   
+  // Personal Report State
+  const [selectedUserForReport, setSelectedUserForReport] = useState(null);
+  const [personalReportData, setPersonalReportData] = useState(null);
+  const [personalLoading, setPersonalLoading] = useState(false);
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  
   const ethiopianMonths = useMemo(() => [
     "Meskerem", "Tekemt", "Hedar", "Tahsas", "Ter", "Yekatit",
     "Megabit", "Miazia", "Ginbot", "Sene", "Hamle", "Nehase", "Pagume"
@@ -119,6 +126,23 @@ const ReportsDashboard = ({ refreshTrigger }) => {
       setError('Failed to fetch attendance report.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchPersonalReport = async () => {
+    if (!selectedUserForReport || !fromDate || !toDate) return;
+    setPersonalLoading(true);
+    try {
+      const res = await client.get(`/reports/attendance?user_id_filter=${selectedUserForReport.user_id}&start_date=${fromDate}&end_date=${toDate}&_t=${Date.now()}`);
+      if (res.data && res.data.length > 0) {
+        setPersonalReportData(res.data[0]);
+      } else {
+        setPersonalReportData({ daily_details: [], days_present: 0, total_hours: 0, late_count: 0 });
+      }
+    } catch (err) {
+      console.error('Error fetching personal report:', err);
+    } finally {
+      setPersonalLoading(false);
     }
   };
 
@@ -194,7 +218,7 @@ const ReportsDashboard = ({ refreshTrigger }) => {
       u.user_id, u.name, u.department, u.total_hours, u.late_count, u.late_minutes, u.early_departure_count, u.missing_punches, u.overtime_hours, u.status
     ]);
 
-    doc.autoTable({
+    autoTable(doc, {
       startY: 45,
       head: [['ID', 'Name', 'Dept', 'HRS', 'Late #', 'Late min', 'Early #', 'Missing', 'OT', 'Status']],
       body: tableData,
@@ -204,6 +228,53 @@ const ReportsDashboard = ({ refreshTrigger }) => {
     });
 
     doc.save(`Attendance_Report_${viewMode === 'daily' ? `${selectedYear}_${selectedMonth}_${selectedDay}` : selectedMonth + '_' + selectedYear}.pdf`);
+  };
+
+  const handleExportPersonalExcel = () => {
+    if (!personalReportData || !personalReportData.daily_details) return;
+    const dataToExport = personalReportData.daily_details.map(row => ({
+      'Date (Gregorian)': row.gregorian_date || row.date,
+      'Morning In': row.morning_in,
+      'Morning Out': row.morning_out,
+      'Afternoon In': row.afternoon_in,
+      'Afternoon Out': row.afternoon_out,
+      'Total Hours': row.total_hours,
+      'Status': row.status,
+      'Late Minutes': row.late_minutes,
+      'Early Minutes': row.early_departure_minutes,
+      'Remarks': !['Present', 'Absent', 'Half Day', 'Off Day'].includes(row.status) ? row.status : ''
+    }));
+    const ws = XLSX.utils.json_to_sheet(dataToExport);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Personal Report");
+    XLSX.writeFile(wb, `Personal_Report_${selectedUserForReport.name}_${fromDate}_to_${toDate}.xlsx`);
+  };
+
+  const handleExportPersonalPDF = () => {
+    if (!personalReportData || !personalReportData.daily_details) return;
+    const doc = new jsPDF('l', 'mm', 'a4');
+    doc.setFontSize(18);
+    doc.text(`Personal Report: ${selectedUserForReport.name}`, 14, 22);
+    doc.setFontSize(11);
+    doc.setTextColor(100);
+    doc.text(`ID: ${selectedUserForReport.user_id} | Period: ${fromDate} to ${toDate}`, 14, 30);
+    
+    const tableData = personalReportData.daily_details.map(row => [
+      row.gregorian_date || row.date, row.morning_in, row.morning_out, row.afternoon_in, row.afternoon_out, 
+      row.total_hours, row.status, row.late_minutes, row.early_departure_minutes, 
+      !['Present', 'Absent', 'Half Day', 'Off Day'].includes(row.status) ? row.status : ''
+    ]);
+
+    autoTable(doc, {
+      startY: 40,
+      head: [['Date', 'M. In', 'M. Out', 'A. In', 'A. Out', 'Hrs', 'Status', 'Late(m)', 'Early(m)', 'Remarks']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [59, 130, 246] },
+      styles: { fontSize: 8 }
+    });
+
+    doc.save(`Personal_Report_${selectedUserForReport.name}_${fromDate}_to_${toDate}.pdf`);
   };
 
   const COLORS = ['#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
@@ -510,12 +581,20 @@ const ReportsDashboard = ({ refreshTrigger }) => {
                       ).map((row) => (
                         <tr key={row.rowKey} className="hover:bg-slate-50/50 transition-colors group">
                           <td className="px-6 py-4">
-                            <div className="flex items-center gap-3">
-                              <div className="w-9 h-9 bg-slate-100 rounded-xl flex items-center justify-center text-slate-600 font-black text-xs group-hover:bg-blue-600 group-hover:text-white transition-all">
+                            <div 
+                              className="flex items-center gap-3 cursor-pointer group/user"
+                              onClick={() => {
+                                setSelectedUserForReport({ user_id: row.employee_id, name: row.employee_name });
+                                setPersonalReportData(null);
+                                setFromDate('');
+                                setToDate('');
+                              }}
+                            >
+                              <div className="w-9 h-9 bg-slate-100 rounded-xl flex items-center justify-center text-slate-600 font-black text-xs group-hover/user:bg-blue-600 group-hover/user:text-white transition-all shadow-sm">
                                 {row.employee_name.charAt(0)}
                               </div>
                               <div className="flex flex-col">
-                                <span className="text-sm font-black text-slate-800">{row.employee_name}</span>
+                                <span className="text-sm font-black text-slate-800 group-hover/user:text-blue-600 transition-colors">{row.employee_name}</span>
                                 <span className="text-[10px] font-bold text-slate-400 uppercase">ID: {row.employee_id}</span>
                               </div>
                             </div>
@@ -750,6 +829,185 @@ const ReportsDashboard = ({ refreshTrigger }) => {
           </div>
         )}
       </div>
+
+      {/* Personal Report Modal */}
+      {selectedUserForReport && (
+        <div className="fixed inset-0 z-[100] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-300">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center font-black text-xl shadow-sm">
+                  {selectedUserForReport.name.charAt(0)}
+                </div>
+                <div>
+                  <h2 className="text-xl font-black text-slate-900">{selectedUserForReport.name}</h2>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">ID: {selectedUserForReport.user_id}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setSelectedUserForReport(null)}
+                className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            {/* Filters */}
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-4 bg-white flex-wrap">
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">From</label>
+                <input 
+                  type="date" 
+                  value={fromDate}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-sm"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">To</label>
+                <input 
+                  type="date" 
+                  value={toDate}
+                  onChange={(e) => setToDate(e.target.value)}
+                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-sm"
+                />
+              </div>
+              <button 
+                onClick={fetchPersonalReport}
+                disabled={!fromDate || !toDate || personalLoading}
+                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-black rounded-xl transition-colors shadow-sm flex items-center gap-2"
+              >
+                {personalLoading ? <RefreshCw size={16} className="animate-spin" /> : <Search size={16} />}
+                APPLY
+              </button>
+              
+              {personalReportData && (
+                <div className="ml-auto flex gap-2">
+                  <button 
+                    onClick={handleExportPersonalExcel}
+                    className="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-colors border border-emerald-100 shadow-sm"
+                    title="Export to Excel"
+                  >
+                    <FileSpreadsheet size={20} />
+                  </button>
+                  <button 
+                    onClick={handleExportPersonalPDF}
+                    className="p-2.5 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors border border-rose-100 shadow-sm"
+                    title="Export to PDF"
+                  >
+                    <FileText size={20} />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Content Area */}
+            <div className="flex-1 overflow-auto bg-slate-50/30 p-6">
+              {!personalReportData && !personalLoading && (
+                <div className="h-full flex flex-col items-center justify-center text-slate-400 gap-3 opacity-60">
+                  <Calendar size={48} />
+                  <p className="font-bold">Select a date range and click Apply to view the report.</p>
+                </div>
+              )}
+
+              {personalLoading && (
+                <div className="h-full flex flex-col items-center justify-center gap-4">
+                   <div className="w-10 h-10 border-4 border-blue-600/20 border-t-blue-600 rounded-full animate-spin"></div>
+                   <p className="text-slate-500 font-bold animate-pulse">Fetching records...</p>
+                </div>
+              )}
+
+              {personalReportData && (
+                <div className="space-y-6 animate-in fade-in duration-500">
+                   {/* Summary */}
+                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                     {[
+                       { label: 'Present Days', value: personalReportData.days_present, color: 'emerald' },
+                       { label: 'Absent Days', value: personalReportData.daily_details.filter(d => d.status === 'Absent').length, color: 'rose' },
+                       { label: 'Half Days', value: personalReportData.daily_details.filter(d => d.status === 'Half Day').length, color: 'amber' },
+                       { label: 'Late Days', value: personalReportData.late_count, color: 'orange' },
+                       { label: 'Total Hours', value: personalReportData.total_hours, color: 'blue' }
+                     ].map((stat, i) => (
+                       <div key={i} className={`bg-white p-4 rounded-2xl border border-${stat.color}-100 shadow-sm flex flex-col items-center justify-center`}>
+                         <div className={`text-2xl font-black text-${stat.color}-600`}>{stat.value}</div>
+                         <div className="text-[10px] font-bold text-slate-400 uppercase mt-1">{stat.label}</div>
+                       </div>
+                     ))}
+                   </div>
+
+                   {/* Table */}
+                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                     <div className="overflow-x-auto">
+                       <table className="w-full text-left">
+                         <thead>
+                           <tr className="bg-slate-50 border-b border-slate-100">
+                             <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider">Date</th>
+                             <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider text-center">M. In</th>
+                             <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider text-center">M. Out</th>
+                             <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider text-center">A. In</th>
+                             <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider text-center">A. Out</th>
+                             <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider text-center">Hrs</th>
+                             <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider text-center">Status</th>
+                             <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider text-center">Late</th>
+                             <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider text-center">Early</th>
+                             <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider">Remarks</th>
+                           </tr>
+                         </thead>
+                         <tbody className="divide-y divide-slate-100">
+                           {personalReportData.daily_details.map((row, idx) => (
+                             <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                               <td className="px-4 py-3">
+                                 <div className="text-xs font-black text-slate-700 bg-slate-100 px-2 py-1 rounded-md inline-block">{row.gregorian_date || row.date}</div>
+                               </td>
+                               <td className="px-4 py-3 text-center text-xs font-bold text-slate-600">{row.morning_in !== 'Not Scanned' ? row.morning_in : '-'}</td>
+                               <td className="px-4 py-3 text-center text-xs font-bold text-slate-600">{row.morning_out !== 'Not Scanned' ? row.morning_out : '-'}</td>
+                               <td className="px-4 py-3 text-center text-xs font-bold text-slate-600">{row.afternoon_in !== 'Not Scanned' ? row.afternoon_in : '-'}</td>
+                               <td className="px-4 py-3 text-center text-xs font-bold text-slate-600">{row.afternoon_out !== 'Not Scanned' ? row.afternoon_out : '-'}</td>
+                               <td className="px-4 py-3 text-center">
+                                 <span className="text-xs font-black text-blue-600">{row.total_hours}h</span>
+                               </td>
+                               <td className="px-4 py-3 text-center">
+                                  <span className={`text-[10px] font-black px-2 py-1 rounded-lg uppercase tracking-wider ${
+                                    row.status === 'Present' ? 'bg-emerald-100 text-emerald-700' :
+                                    row.status === 'Half Day' ? 'bg-amber-100 text-amber-700' :
+                                    row.status === 'Absent' ? 'bg-rose-100 text-rose-700' :
+                                    row.status === 'Off Day' ? 'bg-slate-100 text-slate-500' :
+                                    'bg-purple-100 text-purple-700'
+                                  }`}>
+                                    {row.status}
+                                  </span>
+                               </td>
+                               <td className="px-4 py-3 text-center">
+                                  {row.late_minutes > 0 ? (
+                                    <span className="text-xs font-black text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded">{row.late_minutes}m</span>
+                                  ) : <span className="text-xs text-slate-300">-</span>}
+                               </td>
+                               <td className="px-4 py-3 text-center">
+                                  {row.early_departure_minutes > 0 ? (
+                                    <span className="text-xs font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">{row.early_departure_minutes}m</span>
+                                  ) : <span className="text-xs text-slate-300">-</span>}
+                               </td>
+                               <td className="px-4 py-3 text-xs font-bold text-slate-500">
+                                  {!['Present', 'Absent', 'Half Day', 'Off Day'].includes(row.status) ? row.status : '-'}
+                               </td>
+                             </tr>
+                           ))}
+                           {personalReportData.daily_details.length === 0 && (
+                             <tr>
+                               <td colSpan="10" className="px-4 py-8 text-center text-sm font-bold text-slate-400">No attendance records found for this date range.</td>
+                             </tr>
+                           )}
+                         </tbody>
+                       </table>
+                     </div>
+                   </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

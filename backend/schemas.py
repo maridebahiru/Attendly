@@ -1,6 +1,7 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from datetime import datetime
 from typing import Optional, List, Any
+import json
 
 # Pydantic models for request/response validation
 
@@ -125,6 +126,16 @@ class AdminOut(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator('privileges', mode='before')
+    @classmethod
+    def parse_privileges(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except Exception:
+                return []
+        return v or []
 
 class DeviceStatusOut(BaseModel):
     online: bool
