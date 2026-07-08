@@ -1,5 +1,6 @@
 import logging
 import json
+import os
 
 # Configure logging
 logging.basicConfig(
@@ -58,15 +59,21 @@ async def validation_exception_handler(request, exc):
         content={"detail": exc.errors()},
     )
 
-# CORS enabled for local and network access
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+# CORS configuration with fallback to local development URLs
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS")
+if allowed_origins_env:
+    origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+else:
+    origins = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://192.168.10.241:5173",
         "http://192.168.10.97:5173",
-    ],
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

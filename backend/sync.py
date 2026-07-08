@@ -17,8 +17,9 @@ def fetch_holidays_from_api(year: int) -> list:
     import urllib.request
     import urllib.parse
     import json
+    import os
     
-    api_key = "8y0eFBsrD0uy69YlIhlPGnStPaql7dBU"
+    api_key = os.getenv("CALENDARIFIC_API_KEY", "8y0eFBsrD0uy69YlIhlPGnStPaql7dBU")
     url = f"https://calendarific.com/api/v2/holidays?api_key={api_key}&country={urllib.parse.quote('ET')}&year={year}"
     
     req = urllib.request.Request(

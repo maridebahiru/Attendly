@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { Fingerprint, Lock, User, AlertCircle, RefreshCw } from 'lucide-react';
+import { API_BASE_URL } from '../config';
 
 export default function Login({ onLogin }) {
   const [username, setUsername] = useState('');
@@ -19,7 +20,7 @@ export default function Login({ onLogin }) {
     params.append('password', password);
 
     try {
-      const response = await axios.post(`http://${window.location.hostname}:8000/login`, params, {
+      const response = await axios.post(`${API_BASE_URL}/login`, params, {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
         }

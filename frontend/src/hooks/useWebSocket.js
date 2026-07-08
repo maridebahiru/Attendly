@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { WS_BASE_URL } from '../config';
 
 /**
  * Custom React hook for connecting to the backend WebSocket
  * Auto-reconnects on disconnect with 3s delay
  */
-export function useWebSocket(url = `ws://${window.location.hostname}:8000/ws`) {
+export function useWebSocket(url = WS_BASE_URL) {
   const [lastEvent, setLastEvent] = useState(null);
   const [deviceStatus, setDeviceStatus] = useState(null);
   const [isConnected, setIsConnected] = useState(false);

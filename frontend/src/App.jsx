@@ -20,7 +20,7 @@ import Login from './components/Login';
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token'));
-  const { lastEvent, deviceStatus, eventHistory } = useWebSocket(`ws://${window.location.hostname}:8000/ws`);
+  const { lastEvent, deviceStatus, eventHistory } = useWebSocket();
   const [newEventsCount, setNewEventsCount] = useState(0);
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'users', 'shifts', 'reports', 'admins', 'settings'
   const userRole = localStorage.getItem('user_role');

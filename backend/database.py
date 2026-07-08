@@ -3,7 +3,14 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, UniqueConstraint, Float
 import datetime
 
-DATABASE_URL = "sqlite+aiosqlite:///./attendance.db"
+import os
+
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./attendance.db")
+# Convert Render-style Postgres URL to use the asyncpg driver
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 # Create async SQLAlchemy engine
 engine = create_async_engine(DATABASE_URL, echo=False)

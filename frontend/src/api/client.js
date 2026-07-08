@@ -1,8 +1,9 @@
 import axios from 'axios';
+import { API_BASE_URL } from '../config';
 
 // Create a configured axios client for REST endpoints
 const client = axios.create({
-  baseURL: `http://${window.location.hostname}:8000`,
+  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
