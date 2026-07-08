@@ -212,6 +212,22 @@ async def init_db():
                 session.add(SystemSettings())
                 await session.commit()
 
+        # Ensure default admin exists
+        async with async_session() as session:
+            result = await session.execute(select(Admin).limit(1))
+            if not result.scalars().first():
+                import auth
+                hashed_pw = auth.get_password_hash("admin123")
+                new_admin = Admin(
+                    username="admin",
+                    hashed_password=hashed_pw,
+                    role="super_admin",
+                    privileges='["dashboard","users","attendance","shifts","absences","reports","settings","admins"]'
+                )
+                session.add(new_admin)
+                await session.commit()
+                print("Default admin user 'admin' seeded successfully.")
+
 async def get_db():
     """Dependency to get the database session."""
     async with async_session() as session:
