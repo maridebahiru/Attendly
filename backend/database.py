@@ -5,12 +5,19 @@ import datetime
 
 import os
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./attendance.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+# Fallback to local SQLite if DATABASE_URL is empty or invalid
+if not DATABASE_URL or "://" not in DATABASE_URL:
+    DATABASE_URL = "sqlite+aiosqlite:///./attendance.db"
+
 # Convert Render-style Postgres URL to use the asyncpg driver
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
 elif DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("sqlite://"):
+    DATABASE_URL = DATABASE_URL.replace("sqlite://", "sqlite+aiosqlite://", 1)
 
 # Create async SQLAlchemy engine
 engine = create_async_engine(DATABASE_URL, echo=False)
