@@ -37,7 +37,7 @@ def mask_url(url: str) -> str:
 # Create async SQLAlchemy engine
 try:
     print(f"Connecting to database URL: {mask_url(DATABASE_URL)}")
-    engine = create_async_engine(DATABASE_URL, echo=False)
+    engine = create_async_engine(DATABASE_URL, echo=True)
 except Exception as e:
     print(f"DATABASE ERROR: Failed to create engine for URL. Error: {e}")
     print("Falling back to local SQLite database: sqlite+aiosqlite:///./attendance.db")
@@ -186,21 +186,30 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         
-        # Add new columns to system_settings if they don't exist
-        from sqlalchemy import text
-        new_cols = [
-            ("morning_in_start", "VARCHAR DEFAULT '02:00'"),
-            ("morning_in_end", "VARCHAR DEFAULT '03:00'"),
-            ("morning_out_start", "VARCHAR DEFAULT '05:00'"),
-            ("morning_out_end", "VARCHAR DEFAULT '07:00'"),
-            ("afternoon_in_start", "VARCHAR DEFAULT '08:00'"),
-            ("afternoon_in_end", "VARCHAR DEFAULT '09:00'"),
-            ("afternoon_out_start", "VARCHAR DEFAULT '10:00'"),
-            ("afternoon_out_end", "VARCHAR DEFAULT '12:00'")
-        ]
-        for col_name, col_type in new_cols:
+    # Get existing columns using reflection to avoid Postgres transaction aborts
+    from sqlalchemy import inspect, text
+    def get_columns(bind):
+        insp = inspect(bind)
+        return [c["name"] for c in insp.get_columns("system_settings")]
+        
+    async with engine.connect() as conn:
+        existing_cols = await conn.run_sync(get_columns)
+        
+    new_cols = [
+        ("morning_in_start", "VARCHAR DEFAULT '02:00'"),
+        ("morning_in_end", "VARCHAR DEFAULT '03:00'"),
+        ("morning_out_start", "VARCHAR DEFAULT '05:00'"),
+        ("morning_out_end", "VARCHAR DEFAULT '07:00'"),
+        ("afternoon_in_start", "VARCHAR DEFAULT '08:00'"),
+        ("afternoon_in_end", "VARCHAR DEFAULT '09:00'"),
+        ("afternoon_out_start", "VARCHAR DEFAULT '10:00'"),
+        ("afternoon_out_end", "VARCHAR DEFAULT '12:00'")
+    ]
+    for col_name, col_type in new_cols:
+        if col_name not in existing_cols:
             try:
-                await conn.execute(text(f"ALTER TABLE system_settings ADD COLUMN {col_name} {col_type}"))
+                async with engine.begin() as conn:
+                    await conn.execute(text(f"ALTER TABLE system_settings ADD COLUMN {col_name} {col_type}"))
             except Exception:
                 pass
         
