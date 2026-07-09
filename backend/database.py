@@ -204,29 +204,28 @@ async def init_db():
             except Exception:
                 pass
         
-        # Ensure default settings exist
-        from sqlalchemy import select
-        async with async_session() as session:
-            result = await session.execute(select(SystemSettings).limit(1))
-            if not result.scalars().first():
-                session.add(SystemSettings())
-                await session.commit()
+    # Ensure default settings exist (run outside of engine.begin to avoid Postgres isolation errors)
+    from sqlalchemy import select
+    async with async_session() as session:
+        result = await session.execute(select(SystemSettings).limit(1))
+        if not result.scalars().first():
+            session.add(SystemSettings())
+            await session.commit()
 
         # Ensure default admin exists
-        async with async_session() as session:
-            result = await session.execute(select(Admin).limit(1))
-            if not result.scalars().first():
-                import auth
-                hashed_pw = auth.get_password_hash("admin123")
-                new_admin = Admin(
-                    username="admin",
-                    hashed_password=hashed_pw,
-                    role="super_admin",
-                    privileges='["dashboard","users","attendance","shifts","absences","reports","settings","admins"]'
-                )
-                session.add(new_admin)
-                await session.commit()
-                print("Default admin user 'admin' seeded successfully.")
+        result = await session.execute(select(Admin).limit(1))
+        if not result.scalars().first():
+            import auth
+            hashed_pw = auth.get_password_hash("admin123")
+            new_admin = Admin(
+                username="admin",
+                hashed_password=hashed_pw,
+                role="super_admin",
+                privileges='["dashboard","users","attendance","shifts","absences","reports","settings","admins"]'
+            )
+            session.add(new_admin)
+            await session.commit()
+            print("Default admin user 'admin' seeded successfully.")
 
 async def get_db():
     """Dependency to get the database session."""
