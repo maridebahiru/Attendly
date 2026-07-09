@@ -201,10 +201,16 @@ async def on_reconnect() -> int:
                     })
                 
                 if records_to_insert:
-                    from database import AttendanceLog
-                    # SQLite dialect specific UPSERT / INSERT OR IGNORE
-                    stmt = insert(AttendanceLog).values(records_to_insert)
-                    stmt = stmt.on_conflict_do_nothing(index_elements=['user_id', 'original_timestamp'])
+                    from database import AttendanceLog, engine
+                    
+                    if "postgresql" in engine.url.drivername:
+                        from sqlalchemy.dialects.postgresql import insert as pg_insert
+                        stmt = pg_insert(AttendanceLog).values(records_to_insert)
+                        stmt = stmt.on_conflict_do_nothing(index_elements=['user_id', 'original_timestamp'])
+                    else:
+                        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+                        stmt = sqlite_insert(AttendanceLog).values(records_to_insert)
+                        stmt = stmt.on_conflict_do_nothing(index_elements=['user_id', 'original_timestamp'])
                     
                     result = await db.execute(stmt)
                     await db.commit()
