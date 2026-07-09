@@ -11,7 +11,7 @@ echo and save them directly into your Render Postgres database.
 echo.
 
 :: IMPORTANT: Replace the database URL below with your actual Render Postgres URL
-set DATABASE_URL=postgresql://user:password@host/database
+set DATABASE_URL=postgresql://attendance_gfhy_user:DqpjIdw4g2GHnrxzVFRRIjOBUE3SiXnZ@dpg-d97pvv57vvec73cn3qeg-a.oregon-postgres.render.com/attendance_gfhy
 
 :: Check if virtual environment exists
 if not exist "venv\Scripts\activate.bat" (
