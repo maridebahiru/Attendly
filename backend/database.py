@@ -183,18 +183,14 @@ class EthiopianHoliday(Base):
 
 async def init_db():
     """Initializes the database, creating tables if they don't exist."""
+    from sqlalchemy import inspect, text
+    
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         
-    # Get existing columns using reflection to avoid Postgres transaction aborts
-    from sqlalchemy import inspect, text
-    def get_columns(bind):
-        insp = inspect(bind)
-        return [c["name"] for c in insp.get_columns("system_settings")]
-        
-    async with engine.connect() as conn:
-        existing_cols = await conn.run_sync(get_columns)
-        
+    # Get database dialect name to handle upgrades safely
+    is_postgres = "postgres" in engine.url.drivername or "postgresql" in engine.url.drivername
+    
     new_cols = [
         ("morning_in_start", "VARCHAR DEFAULT '02:00'"),
         ("morning_in_end", "VARCHAR DEFAULT '03:00'"),
@@ -205,13 +201,39 @@ async def init_db():
         ("afternoon_out_start", "VARCHAR DEFAULT '10:00'"),
         ("afternoon_out_end", "VARCHAR DEFAULT '12:00'")
     ]
-    for col_name, col_type in new_cols:
-        if col_name not in existing_cols:
+    
+    if is_postgres:
+        # For Postgres, we can run ALTER TABLE with IF NOT EXISTS in a single transaction safely
+        print("Initializing Postgres schema upgrades...")
+        try:
+            async with engine.begin() as conn:
+                for col_name, col_type in new_cols:
+                    await conn.execute(text(f"ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+            print("Postgres schema upgrades completed successfully.")
+        except Exception as e:
+            print(f"Postgres schema upgrade failed or skipped: {e}")
+    else:
+        # Fallback/SQLite mode: check schema first using reflection
+        print("Initializing SQLite schema upgrades...")
+        def get_columns(bind):
+            insp = inspect(bind)
             try:
-                async with engine.begin() as conn:
-                    await conn.execute(text(f"ALTER TABLE system_settings ADD COLUMN {col_name} {col_type}"))
+                return [c["name"] for c in insp.get_columns("system_settings")]
             except Exception:
-                pass
+                return []
+                
+        try:
+            async with engine.connect() as conn:
+                existing_cols = await conn.run_sync(get_columns)
+                
+            cols_to_add = [col for col in new_cols if col[0] not in existing_cols]
+            if cols_to_add:
+                async with engine.begin() as conn:
+                    for col_name, col_type in cols_to_add:
+                        await conn.execute(text(f"ALTER TABLE system_settings ADD COLUMN {col_name} {col_type}"))
+                print(f"Successfully added SQLite columns: {[c[0] for c in cols_to_add]}")
+        except Exception as e:
+            print(f"SQLite schema upgrade failed: {e}")
         
     # Ensure default settings exist (run outside of engine.begin to avoid Postgres isolation errors)
     from sqlalchemy import select

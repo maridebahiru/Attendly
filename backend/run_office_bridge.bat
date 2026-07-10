@@ -15,7 +15,7 @@ set DATABASE_URL=postgresql://attendance_gfhy_user:DqpjIdw4g2GHnrxzVFRRIjOBUE3Si
 
 :: Check if virtual environment exists
 if not exist "venv\Scripts\activate.bat" (
-    echo [ERROR] Python Virtual Environment (venv) was not found in this folder.
+    echo [ERROR] Python Virtual Environment venv was not found in this folder.
     echo Please ensure you copy the entire 'backend' folder including 'venv'
     echo to the computer and run this script.
     echo.
