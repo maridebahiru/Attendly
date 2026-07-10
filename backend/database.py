@@ -162,15 +162,15 @@ class SystemSettings(Base):
     port = Column(Integer, default=4370)
     device_ip = Column(String, default="192.168.10.40")
 
-    # Configurable scan session time ranges
-    morning_in_start = Column(String, default="02:00")
-    morning_in_end = Column(String, default="03:00")
-    morning_out_start = Column(String, default="05:00")
-    morning_out_end = Column(String, default="07:00")
-    afternoon_in_start = Column(String, default="08:00")
-    afternoon_in_end = Column(String, default="09:00")
-    afternoon_out_start = Column(String, default="10:00")
-    afternoon_out_end = Column(String, default="12:00")
+    # Configurable scan session time ranges (stored in standard time, displayed in Ethiopian time)
+    morning_in_start = Column(String, default="08:00")
+    morning_in_end = Column(String, default="09:00")
+    morning_out_start = Column(String, default="11:00")
+    morning_out_end = Column(String, default="13:00")
+    afternoon_in_start = Column(String, default="14:00")
+    afternoon_in_end = Column(String, default="15:00")
+    afternoon_out_start = Column(String, default="16:00")
+    afternoon_out_end = Column(String, default="18:00")
 
 class EthiopianHoliday(Base):
     """Stores fetched Ethiopian public holidays from Calendarific."""

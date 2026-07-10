@@ -501,8 +501,9 @@ async def get_attendance_report(
             
             def format_eth_time(dt) -> str:
                 if not dt: return "Not Scanned"
-                # Display standard time (with the 6-hour shift included)
-                return dt.strftime("%H:%M:%S")
+                # Convert standard time back to Ethiopian time (subtract 6 hours) for display
+                eth_dt = dt - timedelta(hours=6)
+                return eth_dt.strftime("%H:%M:%S")
 
             user_daily_records.append({
                 "date": eth_date_str,

@@ -1,5 +1,6 @@
 import React from 'react';
 import { User, LogIn, LogOut, CheckCircle } from 'lucide-react';
+import { toEthiopianTime } from '../utils/timeConversion';
 
 export default function LiveFeed({ events }) {
   return (
@@ -49,7 +50,7 @@ export default function LiveFeed({ events }) {
                         {event.punch_type}
                       </span>
                       <p className="text-xs font-medium text-gray-500 mt-1">
-                        {new Date(event.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}
+                        {toEthiopianTime(new Date(event.timestamp)).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}
                       </p>
                     </div>
                   </div>
