@@ -9,7 +9,10 @@ const modules = [
   { id: 'reports', name: 'Reports' },
   { id: 'logs', name: 'Attendance Logs' },
   { id: 'admins', name: 'Admin Management' },
-  { id: 'settings', name: 'Settings' }
+  { id: 'settings', name: 'Settings' },
+  { id: 'system', name: 'System Management' },
+  { id: 'absences', name: 'Absence Management' },
+  { id: 'shifts', name: 'Shift Management' }
 ];
 
 const AdminManagement = () => {

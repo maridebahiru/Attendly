@@ -33,7 +33,8 @@ const modules = [
   { id: 'admins', name: 'Admin Management', icon: ShieldAlert, description: 'Create and remove system administrator accounts' },
   { id: 'settings', name: 'Profile Settings', icon: Settings, description: 'Configure admin account credentials' },
   { id: 'system', name: 'System Management', icon: SlidersHorizontal, description: 'Configure global working hours, off days, and device connection' },
-  { id: 'absences', name: 'Absence Management', icon: UserX, description: 'Manage employee absences, leaves and off-days' }
+  { id: 'absences', name: 'Absence Management', icon: UserX, description: 'Manage employee absences, leaves and off-days' },
+  { id: 'shifts', name: 'Shift Management', icon: Clock, description: 'Configure working hour shifts and assign them to employees' }
 ];
 
 const PrivilegeManagement = () => {

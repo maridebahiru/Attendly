@@ -30,7 +30,6 @@ function App() {
   const hasPrivilege = (page) => {
     if (userRole === 'super_admin') return true;
     if (page === 'absences' && userRole === 'team_leader') return true;
-    if (page === 'shifts') return userRole === 'super_admin';
     return userPrivileges.includes(page);
   };
 
