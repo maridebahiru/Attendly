@@ -8,6 +8,14 @@ export default function StatsCards({ newEventsCount }) {
     in: 0,
     out: 0,
   });
+  const [currentTime, setCurrentTime] = useState(new Date(Date.now() - 6 * 60 * 60 * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date(Date.now() - 6 * 60 * 60 * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     // Fetch stats for today
@@ -55,7 +63,7 @@ export default function StatsCards({ newEventsCount }) {
     { title: "Total Punches Today", value: stats.total, icon: <Clock className="text-blue-500" size={24} />, bg: "bg-blue-50" },
     { title: "Currently IN", value: stats.in, icon: <LogIn className="text-emerald-500" size={24} />, bg: "bg-emerald-50" },
     { title: "Currently OUT", value: stats.out, icon: <LogOut className="text-rose-500" size={24} />, bg: "bg-rose-50" },
-    { title: "Offline Queue", value: "0", icon: <Search className="text-purple-500" size={24} />, bg: "bg-purple-50" }
+    { title: "Current Time", value: currentTime, icon: <Clock className="text-purple-500" size={24} />, bg: "bg-purple-50" }
   ];
 
   return (

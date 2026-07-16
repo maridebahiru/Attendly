@@ -106,12 +106,11 @@ async def get_attendance_logs(
         
         response = []
         for log, user_name in results:
-            # Subtract 6 hours from timestamp to find the correct Ethiopian date
-            eth_dt = log.timestamp - timedelta(hours=6)
+            # The timestamp is stored directly as Ethiopian time
             from ethiopian_date import gregorian_to_ethiopian
-            eth_d = gregorian_to_ethiopian(eth_dt.date())
+            eth_d = gregorian_to_ethiopian(log.timestamp.date())
             eth_date_str = f"{eth_d.year}-{eth_d.month:02d}-{eth_d.day:02d}"
-            # Display standard time (with 6 hours shift included) consistently
+            # Display standard time consistently
             eth_time_str = log.timestamp.strftime("%H:%M:%S")
 
             response.append({
@@ -502,64 +501,17 @@ async def seed_shifts():
         except Exception as e:
             return {"success": False, "message": str(e)}
 
-def add_6_hours(time_str: Optional[str]) -> Optional[str]:
-    if not time_str: return None
-    try:
-        h, m = map(int, time_str.split(":"))
-        h = (h + 6) % 24
-        return f"{h:02d}:{m:02d}"
-    except Exception:
-        return time_str
-
-def subtract_6_hours(time_str: Optional[str]) -> Optional[str]:
-    if not time_str: return None
-    try:
-        h, m = map(int, time_str.split(":"))
-        h = (h - 6 + 24) % 24
-        return f"{h:02d}:{m:02d}"
-    except Exception:
-        return time_str
-
 @app.get("/settings", response_model=schemas.SystemSettingsOut)
 async def get_settings():
     async with async_session() as db:
         settings = await crud.get_settings(db)
-        # Convert to Pydantic and subtract 6 hours for Ethiopian display
-        res = schemas.SystemSettingsOut.model_validate(settings)
-        time_fields = [
-            "entering_time", "out_time", "morning_in", "morning_out", "afternoon_in", "afternoon_out",
-            "morning_in_start", "morning_in_end", "morning_out_start", "morning_out_end",
-            "afternoon_in_start", "afternoon_in_end", "afternoon_out_start", "afternoon_out_end"
-        ]
-        for field in time_fields:
-            val = getattr(res, field, None)
-            if val:
-                setattr(res, field, subtract_6_hours(val))
-        return res
+        return schemas.SystemSettingsOut.model_validate(settings)
 
 @app.put("/settings", response_model=schemas.SystemSettingsOut)
 async def update_settings(settings_update: schemas.SystemSettingsUpdate, current_user: Admin = Depends(auth.check_super_admin)):
-    # Add 6 hours to all incoming time fields to convert Ethiopian to standard Gregorian
-    time_fields = [
-        "entering_time", "out_time", "morning_in", "morning_out", "afternoon_in", "afternoon_out",
-        "morning_in_start", "morning_in_end", "morning_out_start", "morning_out_end",
-        "afternoon_in_start", "afternoon_in_end", "afternoon_out_start", "afternoon_out_end"
-    ]
-    for field in time_fields:
-        val = getattr(settings_update, field, None)
-        if val is not None:
-            setattr(settings_update, field, add_6_hours(val))
-            
     async with async_session() as db:
         settings = await crud.update_settings(db, settings_update)
-        
-        # Convert back to Ethiopian for the response
-        res = schemas.SystemSettingsOut.model_validate(settings)
-        for field in time_fields:
-            val = getattr(res, field, None)
-            if val:
-                setattr(res, field, subtract_6_hours(val))
-        return res
+        return schemas.SystemSettingsOut.model_validate(settings)
 
 # Absence Reporting Endpoints
 @app.post("/absences", response_model=schemas.AbsenceReportOut)

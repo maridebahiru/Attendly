@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import client from '../api/client';
 import { Settings, Save, CheckCircle, AlertCircle, Clock, CalendarDays, Monitor, Network } from 'lucide-react';
-import { toEthiopianTime, toStandardTime } from '../utils/timeConversion';
+
 
 const SystemManagement = () => {
   const [settings, setSettings] = useState({
@@ -50,24 +50,24 @@ const SystemManagement = () => {
         const res = await client.get('/settings');
         const data = res.data;
         setSettings({
-          entering_time: toEthiopianTime(data.entering_time || '08:00'),
-          out_time: toEthiopianTime(data.out_time || '17:00'),
-          morning_in: toEthiopianTime(data.morning_in || '08:00'),
-          morning_out: toEthiopianTime(data.morning_out || '12:00'),
-          afternoon_in: toEthiopianTime(data.afternoon_in || '13:00'),
-          afternoon_out: toEthiopianTime(data.afternoon_out || '17:00'),
+          entering_time: data.entering_time || '08:00',
+          out_time: data.out_time || '17:00',
+          morning_in: data.morning_in || '08:00',
+          morning_out: data.morning_out || '12:00',
+          afternoon_in: data.afternoon_in || '13:00',
+          afternoon_out: data.afternoon_out || '17:00',
           off_days: data.off_days || '',
           machine_id: data.machine_id ?? 1,
           port: data.port ?? 4370,
           device_ip: data.device_ip || '',
-          morning_in_start: toEthiopianTime(data.morning_in_start || '08:00'),
-          morning_in_end: toEthiopianTime(data.morning_in_end || '09:00'),
-          morning_out_start: toEthiopianTime(data.morning_out_start || '11:00'),
-          morning_out_end: toEthiopianTime(data.morning_out_end || '13:00'),
-          afternoon_in_start: toEthiopianTime(data.afternoon_in_start || '14:00'),
-          afternoon_in_end: toEthiopianTime(data.afternoon_in_end || '15:00'),
-          afternoon_out_start: toEthiopianTime(data.afternoon_out_start || '16:00'),
-          afternoon_out_end: toEthiopianTime(data.afternoon_out_end || '18:00')
+          morning_in_start: data.morning_in_start || '08:00',
+          morning_in_end: data.morning_in_end || '09:00',
+          morning_out_start: data.morning_out_start || '11:00',
+          morning_out_end: data.morning_out_end || '13:00',
+          afternoon_in_start: data.afternoon_in_start || '14:00',
+          afternoon_in_end: data.afternoon_in_end || '15:00',
+          afternoon_out_start: data.afternoon_out_start || '16:00',
+          afternoon_out_end: data.afternoon_out_end || '18:00'
         });
       } catch (err) {
         console.error("Failed to fetch settings", err);
@@ -95,24 +95,7 @@ const SystemManagement = () => {
     setMessage({ type: '', text: '' });
 
     try {
-      const standardSettings = {
-        ...settings,
-        entering_time: toStandardTime(settings.entering_time),
-        out_time: toStandardTime(settings.out_time),
-        morning_in: toStandardTime(settings.morning_in),
-        morning_out: toStandardTime(settings.morning_out),
-        afternoon_in: toStandardTime(settings.afternoon_in),
-        afternoon_out: toStandardTime(settings.afternoon_out),
-        morning_in_start: toStandardTime(settings.morning_in_start),
-        morning_in_end: toStandardTime(settings.morning_in_end),
-        morning_out_start: toStandardTime(settings.morning_out_start),
-        morning_out_end: toStandardTime(settings.morning_out_end),
-        afternoon_in_start: toStandardTime(settings.afternoon_in_start),
-        afternoon_in_end: toStandardTime(settings.afternoon_in_end),
-        afternoon_out_start: toStandardTime(settings.afternoon_out_start),
-        afternoon_out_end: toStandardTime(settings.afternoon_out_end),
-      };
-      await client.put('/settings', standardSettings);
+      await client.put('/settings', settings);
       setMessage({ type: 'success', text: 'System settings updated successfully!' });
       setTimeout(() => setMessage({ type: '', text: '' }), 3000);
     } catch (err) {

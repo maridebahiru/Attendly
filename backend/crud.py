@@ -61,13 +61,11 @@ async def save_punch(db: AsyncSession, event: schemas.PunchEvent, device_ip: str
     # Ensure user exists before saving punch
     await get_or_create_user(db, event.user_id)
     
-    # 1. Determine standard today's bounds (using Ethiopian day bounds)
-    # event.timestamp is the raw Ethiopian timestamp from the device
-    corrected_timestamp = event.timestamp + timedelta(hours=6)
+    corrected_timestamp = event.timestamp
     eth_day = event.timestamp.date()
     
-    start_of_day = datetime.combine(eth_day, datetime.min.time()) + timedelta(hours=6)
-    end_of_day = datetime.combine(eth_day, datetime.max.time().replace(microsecond=999999)) + timedelta(hours=6)
+    start_of_day = datetime.combine(eth_day, datetime.min.time())
+    end_of_day = datetime.combine(eth_day, datetime.max.time().replace(microsecond=999999))
 
     # 2. Fetch the absolute last punch for this user TODAY (same Ethiopian day) to decide the toggle
     last_punch_query = (
@@ -123,9 +121,8 @@ async def get_logs(db: AsyncSession, target_date: Optional[date] = None, user_id
     query = select(AttendanceLog, User.name).join(User, AttendanceLog.user_id == User.user_id)
     
     if target_date:
-        # Filter by Ethiopian day bounds (which are standard time bounds shifted by +6 hours)
-        start_of_day = datetime.combine(target_date, datetime.min.time()) + timedelta(hours=6)
-        end_of_day = datetime.combine(target_date, datetime.max.time().replace(microsecond=999999)) + timedelta(hours=6)
+        start_of_day = datetime.combine(target_date, datetime.min.time())
+        end_of_day = datetime.combine(target_date, datetime.max.time().replace(microsecond=999999))
         query = query.filter(AttendanceLog.timestamp >= start_of_day, AttendanceLog.timestamp <= end_of_day)
         
     if user_id:
@@ -304,8 +301,8 @@ async def get_attendance_report(
         start_date_g = date.today()
         end_date_g = start_date_g
 
-    start_bounds = dt_type.combine(start_date_g, t_type.min) + timedelta(hours=6)
-    end_bounds = dt_type.combine(end_date_g, t_type.max.replace(microsecond=999999)) + timedelta(hours=6)
+    start_bounds = dt_type.combine(start_date_g, t_type.min)
+    end_bounds = dt_type.combine(end_date_g, t_type.max.replace(microsecond=999999))
     
     all_logs_query = select(AttendanceLog).filter(
         AttendanceLog.timestamp >= start_bounds, 
@@ -342,7 +339,7 @@ async def get_attendance_report(
         if log.user_id not in logs_by_user:
             logs_by_user[log.user_id] = {}
         # Group by Ethiopian day date
-        d = (log.timestamp - timedelta(hours=6)).date()
+        d = log.timestamp.date()
         if d not in logs_by_user[log.user_id]:
             logs_by_user[log.user_id][d] = []
         logs_by_user[log.user_id][d].append(log)
@@ -501,9 +498,7 @@ async def get_attendance_report(
             
             def format_eth_time(dt) -> str:
                 if not dt: return "Not Scanned"
-                # Convert standard time back to Ethiopian time (subtract 6 hours) for display
-                eth_dt = dt - timedelta(hours=6)
-                return eth_dt.strftime("%H:%M:%S")
+                return dt.strftime("%H:%M:%S")
 
             user_daily_records.append({
                 "date": eth_date_str,
@@ -653,17 +648,12 @@ async def reclassify_all_punches(db: AsyncSession):
     result = await db.execute(select(AttendanceLog).order_by(AttendanceLog.user_id, AttendanceLog.timestamp))
     logs = result.scalars().all()
     
-    # 3. Apply Ethiopian time conversion (add 6 hours to timestamp if timestamp == original_timestamp)
+    # 3. Group by user and Ethiopian day date
     updated = False
     logs_by_user_day = {}
     for log in logs:
-        # Check if 6 hours shift needs to be applied
-        if log.timestamp == log.original_timestamp:
-            log.timestamp = log.original_timestamp + timedelta(hours=6)
-            updated = True
-            
         # Group by user and Ethiopian day date
-        day = (log.timestamp - timedelta(hours=6)).date()
+        day = log.timestamp.date()
         key = (log.user_id, day)
         if key not in logs_by_user_day:
             logs_by_user_day[key] = []

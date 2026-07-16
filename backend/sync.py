@@ -183,7 +183,7 @@ async def on_reconnect() -> int:
                 
                 for att in attendance_records:
                     user_id = str(att.user_id)
-                    corrected_timestamp = att.timestamp + timedelta(hours=6)
+                    corrected_timestamp = att.timestamp
                     l_time = corrected_timestamp.time()
                     
                     punch_label = crud.classify_punch_time(l_time, settings)

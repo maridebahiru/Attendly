@@ -64,7 +64,7 @@ const ReportsDashboard = ({ refreshTrigger }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [viewMode, setViewMode] = useState('daily'); // 'daily' or 'monthly'
-  const [activeTab, setActiveTab] = useState('details'); // 'summary', 'details', 'missing', 'charts', 'device'
+  const [activeTab, setActiveTab] = useState('details'); // 'summary', 'details', 'missing', 'device'
   
   const [selectedDay, setSelectedDay] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
@@ -389,13 +389,11 @@ const ReportsDashboard = ({ refreshTrigger }) => {
           </div>
         </div>
 
-        {/* Tab Navigation */}
         <div className="flex items-center gap-6 mt-8 overflow-x-auto pb-1 no-scrollbar">
           {[
             { id: 'summary', name: 'Overview', icon: TrendingUp },
             { id: 'details', name: 'Full Log Report', icon: History },
             { id: 'missing', name: 'Incomplete Punches', icon: AlertTriangle },
-            { id: 'charts', name: 'Visual Charts', icon: PieChartIcon },
             { id: 'device', name: 'Device Activity', icon: RefreshCw },
           ].map(tab => (
             <button
@@ -566,9 +564,6 @@ const ReportsDashboard = ({ refreshTrigger }) => {
                         <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Morning Out</th>
                         <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Afternoon In</th>
                         <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Afternoon Out</th>
-                        <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Total Hrs</th>
-                        <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Late (min)</th>
-                        <th className="px-4 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Early (min)</th>
                         <th className="px-6 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Status</th>
                       </tr>
                     </thead>
@@ -648,24 +643,6 @@ const ReportsDashboard = ({ refreshTrigger }) => {
                               )}
                             </div>
                           </td>
-                          {/* Total Hrs */}
-                          <td className="px-4 py-4 text-center">
-                            <span className="text-xs font-black text-slate-700 bg-slate-50 px-2 py-1 rounded-lg">
-                              {row.total_hours}h
-                            </span>
-                          </td>
-                          {/* Late Mins */}
-                          <td className="px-4 py-4 text-center">
-                            <span className={`text-xs font-black ${row.late_minutes > 0 ? 'text-rose-600 bg-rose-50' : 'text-slate-400 bg-slate-50'} px-2 py-1 rounded-lg`}>
-                              {row.late_minutes}m
-                            </span>
-                          </td>
-                          {/* Early Mins */}
-                          <td className="px-4 py-4 text-center">
-                            <span className={`text-xs font-black ${row.early_departure_minutes > 0 ? 'text-amber-600 bg-amber-50' : 'text-slate-400 bg-slate-50'} px-2 py-1 rounded-lg`}>
-                              {row.early_departure_minutes}m
-                            </span>
-                          </td>
                           {/* Status */}
                           <td className="px-6 py-4 text-center">
                              <span className={`text-[10px] font-black px-2.5 py-1 rounded-xl uppercase tracking-wider ring-1 ${
@@ -728,102 +705,6 @@ const ReportsDashboard = ({ refreshTrigger }) => {
                    )}
                 </div>
               </div>
-            )}
-
-            {/* TAB CONTENT: CHARTS */}
-            {activeTab === 'charts' && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in slide-in-from-right-4 duration-500 pb-12">
-                  <div className="bg-white p-8 rounded-[32px] border border-slate-100 shadow-sm">
-                    <h3 className="text-lg font-black text-slate-900 mb-8 flex items-center gap-2">
-                       <BarChart3 size={20} className="text-blue-500" />
-                       Performance Comparison
-                    </h3>
-                    <div className="h-[350px]">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={filteredData.slice(0, 10)}>
-                           <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 10, fontWeight: 700}} />
-                           <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10}} />
-                           <Tooltip contentStyle={{borderRadius: '16px'}} />
-                           <Legend 
-                              verticalAlign="top" 
-                              align="right" 
-                              iconType="circle" 
-                              wrapperStyle={{paddingBottom: '20px', fontSize: '10px', fontWeight: 800, textTransform: 'uppercase'}} 
-                           />
-                           <Bar name="Lates (min)" dataKey="late_minutes" fill="#fbbf24" radius={[6, 6, 0, 0]} />
-                           <Bar name="Early (min)" dataKey="early_departure_minutes" fill="#f87171" radius={[6, 6, 0, 0]} />
-                           <Bar name="Overtime (hrs)" dataKey="overtime_hours" fill="#818cf8" radius={[6, 6, 0, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-
-                  <div className="bg-white p-8 rounded-[32px] border border-slate-100 shadow-sm">
-                    <h3 className="text-lg font-black text-slate-900 mb-8 flex items-center gap-2">
-                       <TrendingUp size={20} className="text-emerald-500" />
-                       Department Punctuality (%)
-                    </h3>
-                    <div className="h-[350px]">
-                      <ResponsiveContainer width="100%" height="100%">
-                         <PieChart>
-                            <Pie
-                              data={Object.entries(filteredData.reduce((acc, curr) => {
-                                if (!acc[curr.department]) acc[curr.department] = { name: curr.department, value: 0, total: 0 };
-                                if (curr.late_count === 0) acc[curr.department].value++;
-                                acc[curr.department].total++;
-                                return acc;
-                              }, {})).map(([k, v]) => ({ name: k, value: Math.round((v.value / v.total) * 100) }))}
-                              cx="50%"
-                              cy="50%"
-                              label={({name, value}) => `${name}: ${value}%`}
-                              outerRadius={100}
-                              fill="#8884d8"
-                              dataKey="value"
-                            >
-                              {COLORS.map((entry, index) => (
-                                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                              ))}
-                            </Pie>
-                            <Tooltip />
-                         </PieChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-
-                  <div className="bg-white p-8 rounded-[32px] border border-slate-100 shadow-sm lg:col-span-2">
-                    <h3 className="text-lg font-black text-slate-900 mb-8 flex items-center gap-2">
-                       <TrendingUp size={20} className="text-emerald-500" />
-                       Top Performers (Total Hours)
-                    </h3>
-                    <div className="space-y-4">
-                      {filteredData.sort((a, b) => b.total_hours - a.total_hours).slice(0, 5).map((u, i) => (
-                        <div key={u.user_id} className="flex items-center gap-4 group">
-                          <span className="text-xs font-black text-slate-300 w-4">0{i+1}</span>
-                          <div className="flex-1">
-                            <div className="flex justify-between mb-1.5">
-                              <span className="text-sm font-bold text-slate-700">{u.name}</span>
-                              <span className="text-xs font-black text-emerald-600">{u.total_hours} hrs</span>
-                            </div>
-                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                              <div 
-                                className="h-full bg-emerald-500 rounded-full transition-all duration-1000 group-hover:opacity-80" 
-                                style={{width: `${Math.min((u.total_hours / 160) * 100, 100)}%`}}
-                              ></div>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="mt-12 bg-blue-50 rounded-2xl p-6 border border-blue-100">
-                       <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest mb-2">Shift Adherence Insight</h4>
-                       <p className="text-xs text-blue-700 leading-relaxed font-medium">
-                         Based on current data, your team has a punctuality rate of <span className="font-black text-blue-900">{Math.round(((stats.present - stats.late) / (stats.present || 1)) * 100)}%</span>. 
-                         Most lates occur during the <span className="underline decoration-blue-200">First Shift</span> period.
-                       </p>
-                    </div>
-                  </div>
-               </div>
             )}
 
           </div>

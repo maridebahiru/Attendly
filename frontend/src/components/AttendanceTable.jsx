@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import client from '../api/client';
 import { Filter, ChevronLeft, ChevronRight, Edit2, Save, X } from 'lucide-react';
-import { toEthiopianTime, toStandardTime } from '../utils/timeConversion';
+
 
 export default function AttendanceTable({ newEventsCount, onRefresh }) {
   const [logs, setLogs] = useState([]);
@@ -47,8 +47,7 @@ export default function AttendanceTable({ newEventsCount, onRefresh }) {
 
   const startEdit = (log) => {
     setEditingId(log.id);
-    // Convert log.timestamp from standard time to Ethiopian time before editing
-    const formattedDate = log.timestamp ? toEthiopianTime(log.timestamp) : '';
+    const formattedDate = log.timestamp ? log.timestamp.slice(0, 16) : '';
     setEditTime(formattedDate);
     setEditType(log.punch_type);
   };
@@ -62,10 +61,8 @@ export default function AttendanceTable({ newEventsCount, onRefresh }) {
   const saveEdit = async (logId) => {
     try {
       const userName = localStorage.getItem('username') || 'Admin';
-      // Convert edited Ethiopian time back to standard time before sending to the API
-      const standardTime = toStandardTime(editTime);
       await client.put(`/attendance/${logId}`, {
-        timestamp: standardTime, 
+        timestamp: editTime, 
         punch_type: editType,
         edited_by: userName
       });
@@ -154,10 +151,10 @@ export default function AttendanceTable({ newEventsCount, onRefresh }) {
                       <>
                         <div className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
                           <span className="text-[10px] bg-blue-50 text-blue-700 px-1 py-0.5 rounded font-black tracking-wider uppercase">ETH</span>
-                          {log.eth_date || toEthiopianTime(new Date(log.timestamp)).toLocaleDateString()}
+                          {log.eth_date || new Date(log.timestamp).toLocaleDateString()}
                         </div>
                         <div className="text-sm text-gray-500 font-medium pl-9">
-                          {log.eth_time || toEthiopianTime(new Date(log.timestamp)).toLocaleTimeString()}
+                          {log.eth_time || new Date(log.timestamp).toLocaleTimeString()}
                         </div>
                       </>
                     )}
